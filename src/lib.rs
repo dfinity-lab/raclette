@@ -1,3 +1,5 @@
+mod execution;
+
 use std::fmt;
 use std::string::ToString;
 use term::{
@@ -95,7 +97,7 @@ trait Formatter {
     fn stats(&mut self, stats: &TestStats);
 }
 
-pub fn default_main(tree: TestTree) {
+pub fn tasty_main(tree: TestTree) {
     const DEPTH_MULTIPLIER: usize = 2;
 
     fn max_name_width(d: usize, tree: &TestTree) -> usize {
@@ -180,5 +182,21 @@ pub fn default_main(tree: TestTree) {
         t.fg(GREEN).unwrap();
         write!(t, "ran {} tests\n", stats.run).unwrap();
         t.reset().unwrap();
+    }
+}
+
+pub fn default_main(tree: TestTree) {
+    for result in execution::execute(execution::make_plan(tree)) {
+        println!("TEST {} {:?} in {:?}", result.full_name.join("/"),  result.status, result.duration);
+        if !result.stdout.is_empty() {
+            println!("--- stdout ---");
+            println!("{}", String::from_utf8_lossy(&result.stdout[..]));
+            println!();
+        }
+        if !result.stderr.is_empty() {
+            println!("--- stderr ---");
+            println!("{}", String::from_utf8_lossy(&result.stderr[..]));
+            println!();
+        }
     }
 }
