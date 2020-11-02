@@ -1,4 +1,5 @@
 mod execution;
+mod report;
 
 use std::fmt;
 use std::string::ToString;
@@ -186,17 +187,8 @@ pub fn tasty_main(tree: TestTree) {
 }
 
 pub fn default_main(tree: TestTree) {
-    for result in execution::execute(execution::make_plan(tree)) {
-        println!("TEST {} {:?} in {:?}", result.full_name.join("/"),  result.status, result.duration);
-        if !result.stdout.is_empty() {
-            println!("--- stdout ---");
-            println!("{}", String::from_utf8_lossy(&result.stdout[..]));
-            println!();
-        }
-        if !result.stderr.is_empty() {
-            println!("--- stderr ---");
-            println!("{}", String::from_utf8_lossy(&result.stderr[..]));
-            println!();
-        }
-    }
+    let mut report = report::TapReport::new();
+    let plan = execution::make_plan(tree);
+
+    execution::execute(plan, &mut report);
 }

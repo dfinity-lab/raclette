@@ -8,7 +8,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Status {
     Success,
     Failure(i32),
@@ -17,7 +17,7 @@ pub enum Status {
 }
 
 pub struct Task {
-    full_name: Vec<String>,
+    pub full_name: Vec<String>,
     work: super::GenericAssertion,
 }
 
@@ -38,6 +38,22 @@ pub struct CompletedTask {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub status: Status,
+}
+
+impl CompletedTask {
+    pub fn stdout_as_string(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.stdout)
+    }
+
+    pub fn stderr_as_string(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.stderr)
+    }
+}
+
+pub trait Report {
+    fn init(&mut self, plan: &[Task]);
+    fn report(&mut self, result: CompletedTask);
+    fn done(&mut self);
 }
 
 pub fn make_plan(t: TestTree) -> Vec<Task> {
@@ -106,12 +122,13 @@ fn launch(task: Task) -> RunningTask {
     }
 }
 
-pub fn execute(tasks: Vec<Task>) -> Vec<CompletedTask> {
+pub fn execute(tasks: Vec<Task>, report: &mut dyn Report) {
     let timeout = Duration::from_secs(10);
-    let mut completed = Vec::new();
 
     let mut poll = Poll::new().expect("failed to create poll");
     let mut events = Events::with_capacity(10);
+
+    report.init(&tasks);
 
     for task in tasks {
         let mut running_task = launch(task);
@@ -169,7 +186,7 @@ pub fn execute(tasks: Vec<Task>) -> Vec<CompletedTask> {
                     .read_to_end(&mut running_task.stderr_buf)
                     .expect("failed to completely read STDERR of a dead process");
 
-                completed.push(CompletedTask {
+                report.report(CompletedTask {
                     full_name: running_task.full_name,
                     duration: running_task.started_at.elapsed(),
                     stdout: running_task.stdout_buf,
@@ -180,5 +197,5 @@ pub fn execute(tasks: Vec<Task>) -> Vec<CompletedTask> {
             }
         }
     }
-    completed
+    report.done();
 }
