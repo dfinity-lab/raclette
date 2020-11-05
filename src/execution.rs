@@ -168,6 +168,7 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
 
 pub fn execute(tasks: Vec<Task>, report: &mut dyn Report) {
     let timeout = Duration::from_secs(10);
+    let poll_timeout = Duration::from_millis(100);
 
     let mut poll = Poll::new().expect("failed to create poll");
     let mut events = Events::with_capacity(10);
@@ -179,7 +180,7 @@ pub fn execute(tasks: Vec<Task>, report: &mut dyn Report) {
         let mut observed_task = observe(running_task, &mut poll);
 
         loop {
-            poll.poll(&mut events, Some(timeout))
+            poll.poll(&mut events, Some(poll_timeout))
                 .expect("failed to poll");
 
             let mut buf = vec![0u8; 4096];
