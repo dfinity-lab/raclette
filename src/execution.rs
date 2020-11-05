@@ -8,6 +8,9 @@ use std::io::{self, Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
+const STDOUT_TOKEN: Token = Token(0);
+const STDERR_TOKEN: Token = Token(1);
+
 #[derive(Debug, PartialEq)]
 pub enum Status {
     Success,
@@ -27,6 +30,17 @@ struct RunningTask {
     started_at: Instant,
     stdout_pipe: pipe::Receiver,
     stderr_pipe: pipe::Receiver,
+    stdout_buf: Vec<u8>,
+    stderr_buf: Vec<u8>,
+}
+
+struct ObservedTask {
+    full_name: Vec<String>,
+    pid: Pid,
+    started_at: Instant,
+    stdout_pipe: Option<pipe::Receiver>,
+    stderr_pipe: Option<pipe::Receiver>,
+    status_and_duration: Option<(Status, Duration)>,
     stdout_buf: Vec<u8>,
     stderr_buf: Vec<u8>,
 }
@@ -122,6 +136,36 @@ fn launch(task: Task) -> RunningTask {
     }
 }
 
+fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
+    let RunningTask {
+        full_name,
+        pid,
+        started_at,
+        mut stdout_pipe,
+        mut stderr_pipe,
+        stdout_buf,
+        stderr_buf,
+    } = task;
+
+    poll.registry()
+        .register(&mut stdout_pipe, STDOUT_TOKEN, Interest::READABLE)
+        .unwrap();
+    poll.registry()
+        .register(&mut stderr_pipe, STDERR_TOKEN, Interest::READABLE)
+        .unwrap();
+
+    ObservedTask {
+        full_name,
+        pid,
+        started_at,
+        stdout_pipe: Some(stdout_pipe),
+        stderr_pipe: Some(stderr_pipe),
+        status_and_duration: None,
+        stdout_buf,
+        stderr_buf,
+    }
+}
+
 pub fn execute(tasks: Vec<Task>, report: &mut dyn Report) {
     let timeout = Duration::from_secs(10);
 
@@ -131,68 +175,85 @@ pub fn execute(tasks: Vec<Task>, report: &mut dyn Report) {
     report.init(&tasks);
 
     for task in tasks {
-        let mut running_task = launch(task);
-
-        poll.registry()
-            .register(&mut running_task.stdout_pipe, Token(1), Interest::READABLE)
-            .unwrap();
-        poll.registry()
-            .register(&mut running_task.stderr_pipe, Token(2), Interest::READABLE)
-            .unwrap();
+        let running_task = launch(task);
+        let mut observed_task = observe(running_task, &mut poll);
 
         loop {
             poll.poll(&mut events, Some(timeout))
                 .expect("failed to poll");
+
+            let mut buf = vec![0u8; 4096];
+
             for event in &events {
-                if event.token() == Token(1) && event.is_readable() {
-                    running_task
-                        .stdout_pipe
-                        .read(&mut running_task.stdout_buf)
-                        .expect("failed to read STDOUT");
+                if event.token() == STDOUT_TOKEN {
+                    if event.is_readable() {
+                        if let Some(ref mut pipe) = observed_task.stdout_pipe {
+                            let n = pipe.read(&mut buf)
+                                .expect("failed to read STDOUT");
+                            observed_task.stdout_buf.extend_from_slice(&buf[0..n]);
+                        }
+                    }
+                    if event.is_read_closed() {
+                        observed_task.stdout_pipe = None;
+                    }
                 }
-                if event.token() == Token(2) && event.is_readable() {
-                    running_task
-                        .stderr_pipe
-                        .read(&mut running_task.stderr_buf)
-                        .expect("failed to read STDERR");
+
+                if event.token() == STDERR_TOKEN {
+                    if event.is_readable() {
+                        if let Some(ref mut pipe) = observed_task.stderr_pipe {
+                            let n = pipe.read(&mut buf)
+                                .expect("failed to read STDERR");
+                            observed_task.stderr_buf.extend_from_slice(&buf[0..n]);
+                        }
+                    }
+                    if event.is_read_closed() {
+                        observed_task.stderr_pipe = None;
+                    }
                 }
             }
 
-            let mut maybe_status =
-                match waitpid(Some(running_task.pid), Some(WaitPidFlag::WNOHANG)).unwrap() {
-                    WaitStatus::Exited(_, code) => Some(if code == 0 {
-                        Status::Success
-                    } else {
-                        Status::Failure(code)
-                    }),
-                    WaitStatus::Signaled(_, sig, _) => Some(Status::Signaled(sig.as_str())),
-                    _ => None,
-                };
+            if observed_task.status_and_duration.is_none() {
+                let duration = observed_task.started_at.elapsed();
 
-            let duration = running_task.started_at.elapsed();
+                let mut maybe_status =
+                    match waitpid(Some(observed_task.pid), Some(WaitPidFlag::WNOHANG)).unwrap() {
+                        WaitStatus::Exited(_, code) => Some(if code == 0 {
+                            (Status::Success, duration)
+                        } else {
+                            (Status::Failure(code), duration)
+                        }),
+                        WaitStatus::Signaled(_, sig, _) => {
+                            Some((Status::Signaled(sig.as_str()), duration))
+                        }
+                        _ => None,
+                    };
 
-            if maybe_status.is_none() && duration >= timeout {
-                kill(running_task.pid, Signal::SIGKILL).unwrap();
-                maybe_status = Some(Status::Timeout);
+                if maybe_status.is_none() && duration >= timeout {
+                    kill(observed_task.pid, Signal::SIGKILL).unwrap();
+                    maybe_status = Some((Status::Timeout, duration));
+                }
+
+                observed_task.status_and_duration = maybe_status;
             }
 
-            if let Some(status) = maybe_status {
-                running_task
-                    .stdout_pipe
-                    .read_to_end(&mut running_task.stdout_buf)
-                    .expect("failed to completely read STDOUT of a dead process");
-                running_task
-                    .stderr_pipe
-                    .read_to_end(&mut running_task.stderr_buf)
-                    .expect("failed to completely read STDERR of a dead process");
-
+            if let ObservedTask {
+                full_name,
+                status_and_duration: Some((status, duration)),
+                stdout_pipe: None,
+                stderr_pipe: None,
+                stdout_buf,
+                stderr_buf,
+                ..
+            } = observed_task
+            {
                 report.report(CompletedTask {
-                    full_name: running_task.full_name,
-                    duration: running_task.started_at.elapsed(),
-                    stdout: running_task.stdout_buf,
-                    stderr: running_task.stderr_buf,
+                    full_name,
+                    duration,
+                    stdout: stdout_buf,
+                    stderr: stderr_buf,
                     status,
                 });
+
                 break;
             }
         }

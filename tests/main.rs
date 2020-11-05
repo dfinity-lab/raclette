@@ -27,6 +27,7 @@ fn tests() -> TestTree {
                 ],
             ),
             test_case("infinite loop", || loop {
+                println!("watching a second passing by...");
                 std::thread::sleep(Duration::from_secs(1));
             }),
         ],
