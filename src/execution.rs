@@ -1,4 +1,4 @@
-use crate::{TestTree, TreeNode};
+use crate::{config::Config, TestTree, TreeNode};
 use mio::unix::pipe;
 use mio::{Events, Interest, Poll, Token};
 use nix::sys::signal::{kill, Signal};
@@ -70,10 +70,17 @@ pub trait Report {
     fn done(&mut self);
 }
 
-pub fn make_plan(t: TestTree) -> Vec<Task> {
-    fn go(t: TestTree, mut path: Vec<String>, buf: &mut Vec<Task>) {
+pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
+    fn matches(name: &str, filter: &Option<String>) -> bool {
+        filter.as_ref().map(|f| name.contains(f)).unwrap_or(true)
+    }
+
+    fn go(f: &Option<String>, t: TestTree, mut path: Vec<String>, buf: &mut Vec<Task>) {
         match t {
             TestTree(TreeNode::Leaf { name, assertion }) => {
+                if !matches(&name, f) {
+                    return;
+                }
                 path.push(name);
                 buf.push(Task {
                     work: assertion,
@@ -81,15 +88,23 @@ pub fn make_plan(t: TestTree) -> Vec<Task> {
                 })
             }
             TestTree(TreeNode::Fork { name, tests }) => {
-                path.push(name);
-                for t in tests {
-                    go(t, path.clone(), buf);
+                if matches(&name, f) {
+                    path.push(name);
+                    for t in tests {
+                        go(&None, t, path.clone(), buf);
+                    }
+                } else {
+                    path.push(name);
+                    for t in tests {
+                        go(f, t, path.clone(), buf);
+                    }
                 }
             }
         }
     }
+
     let mut plan = Vec::new();
-    go(t, Vec::new(), &mut plan);
+    go(&config.filter, t, Vec::new(), &mut plan);
     plan
 }
 
@@ -166,7 +181,7 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
     }
 }
 
-pub fn execute(tasks: Vec<Task>, report: &mut dyn Report) {
+pub fn execute(_config: &Config, tasks: Vec<Task>, report: &mut dyn Report) {
     let timeout = Duration::from_secs(10);
     let poll_timeout = Duration::from_millis(100);
 
@@ -189,8 +204,7 @@ pub fn execute(tasks: Vec<Task>, report: &mut dyn Report) {
                 if event.token() == STDOUT_TOKEN {
                     if event.is_readable() {
                         if let Some(ref mut pipe) = observed_task.stdout_pipe {
-                            let n = pipe.read(&mut buf)
-                                .expect("failed to read STDOUT");
+                            let n = pipe.read(&mut buf).expect("failed to read STDOUT");
                             observed_task.stdout_buf.extend_from_slice(&buf[0..n]);
                         }
                     }
@@ -202,8 +216,7 @@ pub fn execute(tasks: Vec<Task>, report: &mut dyn Report) {
                 if event.token() == STDERR_TOKEN {
                     if event.is_readable() {
                         if let Some(ref mut pipe) = observed_task.stderr_pipe {
-                            let n = pipe.read(&mut buf)
-                                .expect("failed to read STDERR");
+                            let n = pipe.read(&mut buf).expect("failed to read STDERR");
                             observed_task.stderr_buf.extend_from_slice(&buf[0..n]);
                         }
                     }

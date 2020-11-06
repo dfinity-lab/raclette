@@ -1,36 +1,39 @@
-use crate::execution::{CompletedTask, Report, Status, Task};
+use crate::{
+    config::When,
+    execution::{CompletedTask, Report, Status, Task},
+};
 use term::color::{Color, BRIGHT_GREEN, BRIGHT_RED};
 
 pub struct TapReport {
     out: Box<term::StdoutTerminal>,
-    out_supports_color: bool,
-    out_supports_reset: bool,
+    use_color: bool,
     count: usize,
     total: usize,
 }
 
 impl TapReport {
-    pub fn new() -> Self {
+    pub fn new(color: When) -> Self {
         let out = term::stdout().unwrap();
-        let out_supports_color = out.supports_color();
-        let out_supports_reset = out.supports_reset();
+        let use_color = match color {
+            When::Never => false,
+            When::Always | When::Auto => out.supports_color() && out.supports_reset(),
+        };
         Self {
             out,
-            out_supports_color,
-            out_supports_reset,
+            use_color,
             total: 0,
             count: 0,
         }
     }
 
     fn fg(&mut self, color: Color) {
-        if self.out_supports_color {
+        if self.use_color {
             self.out.fg(color).unwrap();
         }
     }
 
     fn reset(&mut self) {
-        if self.out_supports_reset {
+        if self.use_color {
             self.out.reset().unwrap();
         }
     }
@@ -47,7 +50,11 @@ impl Report for TapReport {
         self.count += 1;
         let ok = task.status == Status::Success;
 
-        let (msg, color) = if ok { ("ok", BRIGHT_GREEN) } else { ("not ok", BRIGHT_RED) };
+        let (msg, color) = if ok {
+            ("ok", BRIGHT_GREEN)
+        } else {
+            ("not ok", BRIGHT_RED)
+        };
 
         self.fg(color);
         write!(self.out, "{} ", msg).unwrap();

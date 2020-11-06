@@ -1,3 +1,4 @@
+pub mod config;
 mod execution;
 mod report;
 
@@ -129,7 +130,8 @@ pub fn tasty_main(tree: TestTree) {
                         name,
                         width = width,
                         name_width = name_width - width
-                    ).unwrap();
+                    )
+                    .unwrap();
                     stats.run += 1;
                 }
                 Err(err) => {
@@ -140,7 +142,8 @@ pub fn tasty_main(tree: TestTree) {
                         name,
                         width = width,
                         name_width = name_width - width
-                    ).unwrap();
+                    )
+                    .unwrap();
                     for line in format!("{}", err).lines() {
                         tm.fg(RED).unwrap();
                         write!(
@@ -149,7 +152,8 @@ pub fn tasty_main(tree: TestTree) {
                             "",
                             line,
                             width = width + DEPTH_MULTIPLIER
-                        ).unwrap();
+                        )
+                        .unwrap();
                         tm.reset().unwrap();
                     }
                     stats.run += 1;
@@ -187,8 +191,31 @@ pub fn tasty_main(tree: TestTree) {
 }
 
 pub fn default_main(tree: TestTree) {
-    let mut report = report::TapReport::new();
-    let plan = execution::make_plan(tree);
+    use config::ConfigParseError as E;
 
-    execution::execute(plan, &mut report);
+    let config = config::Config::from_args().unwrap_or_else(|err| match err {
+        E::HelpRequested => {
+            print!("{}", config::produce_help());
+            std::process::exit(0)
+        }
+        E::OptionError(err) => {
+            println!("{}", err);
+            print!("{}", config::produce_help());
+            std::process::exit(1)
+        }
+        E::UnknownArgs(args) => {
+            println!("Unsupported arguments: {}", args.join(" "));
+            print!("{}", config::produce_help());
+            std::process::exit(1)
+        }
+        E::Unknown(err) => {
+            println!("Failed to parse command line flags: {}", err);
+            std::process::exit(1)
+        }
+    });
+
+    let mut report = report::TapReport::new(config.color);
+    let plan = execution::make_plan(&config, tree);
+
+    execution::execute(&config, plan, &mut report);
 }
