@@ -2,6 +2,7 @@ pub mod config;
 mod execution;
 mod report;
 
+use std::any::Any;
 use std::fmt;
 use std::string::ToString;
 use term::{
@@ -33,15 +34,18 @@ fn run_assertion(a: GenericAssertion) -> Result<(), GenericError> {
 }
 
 struct PanicError {
-    origin: Box<dyn std::any::Any + Send + 'static>,
+    origin: Box<dyn Any + Send + 'static>,
+}
+
+fn try_get_panic_msg<'a>(obj: &'a Box<dyn Any + Send + 'static>) -> Option<&'a str> {
+    obj.downcast_ref::<&str>()
+        .map(|s| *s)
+        .or_else(|| obj.downcast_ref::<String>().map(|s| s.as_str()))
 }
 
 impl fmt::Debug for PanicError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(s) = self.origin.downcast_ref::<&str>() {
-            return write!(f, "{}", s);
-        }
-        if let Some(s) = self.origin.downcast_ref::<String>() {
+        if let Some(s) = try_get_panic_msg(&self.origin) {
             return write!(f, "{}", s);
         }
         write!(f, "PANICKED")
@@ -75,6 +79,32 @@ pub fn test_suite<N: ToString>(name: N, tests: Vec<TestTree>) -> TestTree {
         name: name.to_string(),
         tests: tests,
     })
+}
+
+pub fn should_panic(
+    expected_msg: &str,
+    f: impl FnOnce() + std::panic::UnwindSafe + 'static,
+) -> impl FnOnce() + std::panic::UnwindSafe + 'static {
+    let msg = expected_msg.to_string();
+    move || match std::panic::catch_unwind(f) {
+        Ok(_) => {
+            print!("note: test did not panic as expected");
+            panic!();
+        }
+        Err(origin) => match try_get_panic_msg(&origin) {
+            Some(actual_msg) if actual_msg.contains(&msg) => (),
+            Some(actual_msg) => {
+                println!(
+                    "note: panic did not contain expected string\
+              \n      panic message: `{:?}`\
+              \n expected substring: `{:?}`\n",
+                    actual_msg, msg
+                );
+                panic!();
+            }
+            None => panic!("failed to extract a message from panic payload"),
+        },
+    }
 }
 
 #[derive(Default)]

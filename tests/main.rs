@@ -14,16 +14,26 @@ fn mult_table_tests() -> Vec<TestTree> {
     tests
 }
 
+fn zero() -> u64 {
+    0
+}
+
 fn tests() -> TestTree {
     test_suite(
-        "All",
+        "all",
         vec![
             test_suite(
-                "Arithmetics",
+                "arithmetics",
                 vec![
                     test_case("addition", || assert_eq!(4, 2 + 2)),
                     test_case("bad math", || assert_eq!(47, 7 * 7)),
-                    test_suite("Multiplication", mult_table_tests()),
+                    test_case(
+                        "div by zero",
+                        should_panic("zero", || {
+                            let _x = 3 / zero();
+                        }),
+                    ),
+                    test_suite("multiplication", mult_table_tests()),
                 ],
             ),
             test_case("infinite loop", || loop {
