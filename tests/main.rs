@@ -18,6 +18,13 @@ fn zero() -> u64 {
     0
 }
 
+fn loop_infinitely() {
+    loop {
+        println!("watching a second passing by...");
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
 fn tests() -> TestTree {
     test_suite(
         "all",
@@ -36,10 +43,12 @@ fn tests() -> TestTree {
                     test_suite("multiplication", mult_table_tests()),
                 ],
             ),
-            test_case("infinite loop", || loop {
-                println!("watching a second passing by...");
-                std::thread::sleep(Duration::from_secs(1));
-            }),
+            test_case("infinite loop 1", loop_infinitely),
+            test_case("infinite loop 2", loop_infinitely),
+            skip(
+                "two infinite loops are enough",
+                test_case("infinite loop 3", loop_infinitely),
+            ),
         ],
     )
 }

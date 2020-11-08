@@ -48,7 +48,11 @@ impl Report for TapReport {
 
     fn report(&mut self, task: CompletedTask) {
         self.count += 1;
-        let ok = task.status == Status::Success;
+        let (ok, suffix) = match &task.status {
+            Status::Success => (true, None),
+            Status::Skipped(reason) => (true, Some(format!(" # SKIP {}", reason))),
+            _ => (false, None),
+        };
 
         let (msg, color) = if ok {
             ("ok", BRIGHT_GREEN)
@@ -60,7 +64,14 @@ impl Report for TapReport {
         write!(self.out, "{} ", msg).unwrap();
         self.reset();
 
-        writeln!(self.out, "{} - {}", self.count, task.full_name.join("/")).unwrap();
+        writeln!(
+            self.out,
+            "{} - {}{}",
+            self.count,
+            task.full_name.join("::"),
+            suffix.unwrap_or_default()
+        )
+        .unwrap();
 
         match task.status {
             Status::Success => {
@@ -85,6 +96,7 @@ impl Report for TapReport {
             Status::Timeout => {
                 writeln!(self.out, "# timed out after {:?}", task.duration).unwrap();
             }
+            Status::Skipped(_) => (),
         }
 
         if !ok {

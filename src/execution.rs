@@ -1,4 +1,4 @@
-use crate::{config::Config, TestTree, TreeNode};
+use crate::{config::Config, Options, TestTree, TreeNode};
 use mio::unix::pipe;
 use mio::{Events, Interest, Poll, Token};
 use nix::sys::signal::{kill, Signal};
@@ -17,6 +17,7 @@ pub enum Status {
     Failure(i32),
     Signaled(&'static str),
     Timeout,
+    Skipped(String),
 }
 
 enum InputSource {
@@ -27,6 +28,7 @@ enum InputSource {
 pub struct Task {
     pub full_name: Vec<String>,
     work: super::GenericAssertion,
+    options: Options,
 }
 
 struct RunningTask {
@@ -80,9 +82,19 @@ pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
         filter.as_ref().map(|f| name.contains(f)).unwrap_or(true)
     }
 
-    fn go(f: &Option<String>, t: TestTree, mut path: Vec<String>, buf: &mut Vec<Task>) {
+    fn go(
+        f: &Option<String>,
+        t: TestTree,
+        mut path: Vec<String>,
+        buf: &mut Vec<Task>,
+        parent_opts: Options,
+    ) {
         match t {
-            TestTree(TreeNode::Leaf { name, assertion }) => {
+            TestTree(TreeNode::Leaf {
+                name,
+                assertion,
+                options,
+            }) => {
                 if !matches(&name, f) {
                     return;
                 }
@@ -90,18 +102,24 @@ pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
                 buf.push(Task {
                     work: assertion,
                     full_name: path,
+                    options: Options::inherit(options, parent_opts),
                 })
             }
-            TestTree(TreeNode::Fork { name, tests }) => {
+            TestTree(TreeNode::Fork {
+                name,
+                tests,
+                options,
+            }) => {
+                let effective_opts = Options::inherit(options, parent_opts);
                 if matches(&name, f) {
                     path.push(name);
                     for t in tests {
-                        go(&None, t, path.clone(), buf);
+                        go(&None, t, path.clone(), buf, effective_opts.clone());
                     }
                 } else {
                     path.push(name);
                     for t in tests {
-                        go(f, t, path.clone(), buf);
+                        go(f, t, path.clone(), buf, effective_opts.clone());
                     }
                 }
             }
@@ -109,7 +127,7 @@ pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
     }
 
     let mut plan = Vec::new();
-    go(&config.filter, t, Vec::new(), &mut plan);
+    go(&config.filter, t, Vec::new(), &mut plan, Options::default());
     plan
 }
 
@@ -210,10 +228,19 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
     }
 }
 
+fn skip_task(task: Task, reason: String) -> CompletedTask {
+    CompletedTask {
+        full_name: task.full_name,
+        duration: Duration::default(),
+        stdout: vec![],
+        stderr: vec![],
+        status: Status::Skipped(reason),
+    }
+}
+
 pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
     let timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT);
     let jobs = config.jobs.unwrap_or_else(|| num_cpus::get());
-
     let poll_timeout = Duration::from_millis(100);
 
     let mut poll = Poll::new().expect("failed to create poll");
@@ -230,7 +257,12 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
     while !tasks.is_empty() || !observed_tasks.is_empty() {
         while observed_tasks.len() < jobs {
             match tasks.pop() {
-                Some(task) => {
+                Some(mut task) => {
+                    if let Some(reason) = task.options.skip_reason.take() {
+                        report.report(skip_task(task, reason));
+                        continue;
+                    }
+
                     let running_task = launch(task);
                     let observed_task = observe(running_task, &mut poll);
                     observed_tasks.insert(observed_task.pid, observed_task);
