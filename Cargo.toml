@@ -8,6 +8,7 @@ edition = "2018"
 [dependencies]
 mio = { version = "0.7", features = ["os-poll", "pipe"] }
 nix = "0.18"
+num_cpus = "1.0"
 pico-args = "0.3"
 term = "0.6"
 

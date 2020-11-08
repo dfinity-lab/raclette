@@ -4,12 +4,12 @@ use mio::{Events, Interest, Poll, Token};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{self, fork, ForkResult, Pid};
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
-const STDOUT_TOKEN: Token = Token(0);
-const STDERR_TOKEN: Token = Token(1);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, PartialEq)]
 pub enum Status {
@@ -17,6 +17,11 @@ pub enum Status {
     Failure(i32),
     Signaled(&'static str),
     Timeout,
+}
+
+enum InputSource {
+    Stdout,
+    Stderr,
 }
 
 pub struct Task {
@@ -151,6 +156,22 @@ fn launch(task: Task) -> RunningTask {
     }
 }
 
+fn make_token(pid: Pid, source: InputSource) -> Token {
+    match source {
+        InputSource::Stdout => Token((pid.as_raw() as usize) << 1),
+        InputSource::Stderr => Token((pid.as_raw() as usize) << 1 | 1),
+    }
+}
+
+fn split_token(token: Token) -> (Pid, InputSource) {
+    let src = if token.0 & 1 == 0 {
+        InputSource::Stdout
+    } else {
+        InputSource::Stderr
+    };
+    (Pid::from_raw((token.0 >> 1) as i32), src)
+}
+
 fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
     let RunningTask {
         full_name,
@@ -163,10 +184,18 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
     } = task;
 
     poll.registry()
-        .register(&mut stdout_pipe, STDOUT_TOKEN, Interest::READABLE)
+        .register(
+            &mut stdout_pipe,
+            make_token(pid, InputSource::Stdout),
+            Interest::READABLE,
+        )
         .unwrap();
     poll.registry()
-        .register(&mut stderr_pipe, STDERR_TOKEN, Interest::READABLE)
+        .register(
+            &mut stderr_pipe,
+            make_token(pid, InputSource::Stderr),
+            Interest::READABLE,
+        )
         .unwrap();
 
     ObservedTask {
@@ -181,27 +210,49 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
     }
 }
 
-pub fn execute(_config: &Config, tasks: Vec<Task>, report: &mut dyn Report) {
-    let timeout = Duration::from_secs(10);
+pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
+    let timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT);
+    let jobs = config.jobs.unwrap_or_else(|| num_cpus::get());
+
     let poll_timeout = Duration::from_millis(100);
 
     let mut poll = Poll::new().expect("failed to create poll");
-    let mut events = Events::with_capacity(10);
+    let mut events = Events::with_capacity(jobs * 2);
+    let mut buf = vec![0u8; 4096];
 
     report.init(&tasks);
 
-    for task in tasks {
-        let running_task = launch(task);
-        let mut observed_task = observe(running_task, &mut poll);
+    let mut observed_tasks = HashMap::<Pid, ObservedTask>::new();
+    let mut completed_pids = Vec::<Pid>::new();
 
-        loop {
-            poll.poll(&mut events, Some(poll_timeout))
-                .expect("failed to poll");
+    tasks.reverse();
 
-            let mut buf = vec![0u8; 4096];
+    while !tasks.is_empty() || !observed_tasks.is_empty() {
+        while observed_tasks.len() < jobs {
+            match tasks.pop() {
+                Some(task) => {
+                    let running_task = launch(task);
+                    let observed_task = observe(running_task, &mut poll);
+                    observed_tasks.insert(observed_task.pid, observed_task);
+                }
+                None => {
+                    break;
+                }
+            }
+        }
 
-            for event in &events {
-                if event.token() == STDOUT_TOKEN {
+        poll.poll(&mut events, Some(poll_timeout))
+            .expect("failed to poll");
+
+        for event in &events {
+            let (pid, src) = split_token(event.token());
+
+            let observed_task = observed_tasks
+                .get_mut(&pid)
+                .expect("received an event for a process that is not observed");
+
+            match src {
+                InputSource::Stdout => {
                     if event.is_readable() {
                         if let Some(ref mut pipe) = observed_task.stdout_pipe {
                             let n = pipe.read(&mut buf).expect("failed to read STDOUT");
@@ -212,8 +263,7 @@ pub fn execute(_config: &Config, tasks: Vec<Task>, report: &mut dyn Report) {
                         observed_task.stdout_pipe = None;
                     }
                 }
-
-                if event.token() == STDERR_TOKEN {
+                InputSource::Stderr => {
                     if event.is_readable() {
                         if let Some(ref mut pipe) = observed_task.stderr_pipe {
                             let n = pipe.read(&mut buf).expect("failed to read STDERR");
@@ -225,7 +275,9 @@ pub fn execute(_config: &Config, tasks: Vec<Task>, report: &mut dyn Report) {
                     }
                 }
             }
+        }
 
+        for (pid, observed_task) in observed_tasks.iter_mut() {
             if observed_task.status_and_duration.is_none() {
                 let duration = observed_task.started_at.elapsed();
 
@@ -251,26 +303,31 @@ pub fn execute(_config: &Config, tasks: Vec<Task>, report: &mut dyn Report) {
             }
 
             if let ObservedTask {
-                full_name,
-                status_and_duration: Some((status, duration)),
+                status_and_duration: Some(_),
                 stdout_pipe: None,
                 stderr_pipe: None,
-                stdout_buf,
-                stderr_buf,
                 ..
             } = observed_task
             {
-                report.report(CompletedTask {
-                    full_name,
-                    duration,
-                    stdout: stdout_buf,
-                    stderr: stderr_buf,
-                    status,
-                });
-
-                break;
+                completed_pids.push(*pid);
             }
         }
+
+        for pid in completed_pids.iter() {
+            let observed_task = observed_tasks.remove(pid).unwrap();
+            let (status, duration) = observed_task.status_and_duration.unwrap();
+
+            report.report(CompletedTask {
+                full_name: observed_task.full_name,
+                duration,
+                stdout: observed_task.stdout_buf,
+                stderr: observed_task.stderr_buf,
+                status,
+            });
+        }
+
+        completed_pids.clear();
     }
+
     report.done();
 }
