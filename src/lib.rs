@@ -108,7 +108,7 @@ pub fn should_panic(
 }
 
 pub fn default_main(tree: TestTree) {
-    use config::ConfigParseError as E;
+    use config::{ConfigParseError as E, Format};
 
     let config = config::Config::from_args().unwrap_or_else(|err| match err {
         E::HelpRequested => {
@@ -131,8 +131,12 @@ pub fn default_main(tree: TestTree) {
         }
     });
 
-    let mut report = report::TapReport::new(config.color);
+    let writer = report::ColorWriter::new(config.color);
+    let mut report: Box<dyn execution::Report> = match config.format {
+        Format::Auto | Format::LibTest => Box::new(report::LibTestReport::new(writer)),
+        Format::Tap => Box::new(report::TapReport::new(writer)),
+    };
     let plan = execution::make_plan(&config, tree);
 
-    execution::execute(&config, plan, &mut report);
+    execution::execute(&config, plan, &mut *report);
 }

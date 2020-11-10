@@ -17,6 +17,23 @@ impl Default for When {
     }
 }
 
+/// Enumerates all the formats that can be used to report test results.
+#[derive(PartialEq, Clone, Copy)]
+pub enum Format {
+    /// Default formatter.
+    Auto,
+    /// Use the same format that libtest uses.
+    LibTest,
+    /// Use the format specified on http://testanything.org.
+    Tap,
+}
+
+impl Default for Format {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
 #[derive(Default)]
 pub struct Config {
     /// Filter controls which tests are to be executed.
@@ -34,6 +51,8 @@ pub struct Config {
     pub color: When,
     /// How many tests to execute in parallel.
     pub jobs: Option<usize>,
+    /// Which format to use to report test results.
+    pub format: Format,
 }
 
 pub enum ConfigParseError {
@@ -51,6 +70,8 @@ Options:
   -t, --timeout[=NSEC]     specify test execution timeout to be NSEC seconds
   -c, --color[=WHEN]       colorize the output, WHEN can be
                            'auto' (default), 'always' or 'never'
+  -f, --format=[FMT]       output the test report in the specified format,
+                           FMT can be 'auto' (default), 'libtest' or 'tap'
   -j, --jobs
   -h, --help               display this help and exit
 "#,
@@ -64,6 +85,15 @@ fn parse_when(input: &str) -> Result<When, String> {
         "always" => Ok(When::Always),
         "never" => Ok(When::Never),
         _ => Err(format!("unsupported WHEN value: {}", input)),
+    }
+}
+
+fn parse_format(input: &str) -> Result<Format, String> {
+    match input {
+        "auto" => Ok(Format::Auto),
+        "libtest" => Ok(Format::LibTest),
+        "tap" => Ok(Format::Tap),
+        _ => Err(format!("unsupported FMT value: {}", input)),
     }
 }
 
@@ -96,6 +126,11 @@ impl Config {
             .map_err(|err| convert_error(err, "color"))?
             .unwrap_or(When::Auto);
 
+        let format = args
+            .opt_value_from_fn(["-f", "--format"], parse_format)
+            .map_err(|err| convert_error(err, "format"))?
+            .unwrap_or(Format::Auto);
+
         let jobs = args
             .opt_value_from_str(["-j", "--jobs"])
             .map_err(|err| convert_error(err, "jobs"))?;
@@ -120,6 +155,7 @@ impl Config {
             timeout,
             color,
             jobs,
+            format,
         })
     }
 }

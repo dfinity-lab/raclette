@@ -69,6 +69,10 @@ impl CompletedTask {
     pub fn stderr_as_string(&self) -> std::borrow::Cow<'_, str> {
         String::from_utf8_lossy(&self.stderr)
     }
+
+    pub fn name(&self) -> String {
+        self.full_name.join("::")
+    }
 }
 
 pub trait Report {
