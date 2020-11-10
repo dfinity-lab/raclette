@@ -1,7 +1,7 @@
 use crate::{config::Config, Options, TestTree, TreeNode};
 use mio::unix::pipe;
 use mio::{Events, Interest, Poll, Token};
-use nix::sys::signal::{kill, Signal};
+use nix::sys::signal::{killpg, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{self, fork, ForkResult, Pid};
 use std::collections::HashMap;
@@ -149,6 +149,9 @@ fn launch(task: Task) -> RunningTask {
 
     let pid = match fork().expect("failed to fork") {
         ForkResult::Child => {
+            let self_pid = unistd::getpid();
+            unistd::setpgid(self_pid, self_pid).expect("child: failed to set PGID");
+
             std::mem::drop(stdout_receiver);
             std::mem::drop(stderr_receiver);
 
@@ -164,7 +167,13 @@ fn launch(task: Task) -> RunningTask {
             (task.work)();
             std::process::exit(0)
         }
-        ForkResult::Parent { child, .. } => child,
+        ForkResult::Parent { child, .. } => {
+            // We create a new process group for the child to be able
+            // to kill all the processes spawned by the test if the
+            // test times out.
+            unistd::setpgid(child, child).expect("failed to set PGID of the child");
+            child
+        }
     };
 
     RunningTask {
@@ -331,7 +340,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
                     };
 
                 if maybe_status.is_none() && duration >= timeout {
-                    kill(observed_task.pid, Signal::SIGKILL).unwrap();
+                    killpg(observed_task.pid, Signal::SIGKILL).unwrap();
                     maybe_status = Some((Status::Timeout, duration));
                 }
 
