@@ -2,6 +2,8 @@ pub mod config;
 mod execution;
 mod report;
 
+pub use config::Config;
+
 use std::any::Any;
 use std::string::ToString;
 
@@ -37,7 +39,7 @@ enum TreeNode {
 
 fn try_get_panic_msg<'a>(obj: &'a Box<dyn Any + Send + 'static>) -> Option<&'a str> {
     obj.downcast_ref::<&str>()
-        .map(|s| *s)
+        .copied()
         .or_else(|| obj.downcast_ref::<String>().map(|s| s.as_str()))
 }
 
@@ -55,7 +57,7 @@ pub fn test_case<N: ToString, A: FnOnce() + std::panic::UnwindSafe + 'static>(
 pub fn test_suite(name: impl ToString, tests: Vec<TestTree>) -> TestTree {
     TestTree(TreeNode::Fork {
         name: name.to_string(),
-        tests: tests,
+        tests,
         options: Options::default(),
     })
 }
@@ -107,10 +109,10 @@ pub fn should_panic(
     }
 }
 
-pub fn default_main(tree: TestTree) {
+pub fn default_main(default_config: Config, tree: TestTree) {
     use config::{ConfigParseError as E, Format};
 
-    let config = config::Config::from_args().unwrap_or_else(|err| match err {
+    let override_config = Config::from_args().unwrap_or_else(|err| match err {
         E::HelpRequested => {
             print!("{}", config::produce_help());
             std::process::exit(0)
@@ -130,6 +132,8 @@ pub fn default_main(tree: TestTree) {
             std::process::exit(1)
         }
     });
+
+    let config = override_config.merge(default_config);
 
     let writer = report::ColorWriter::new(config.color);
     let mut report: Box<dyn execution::Report> = match config.format {

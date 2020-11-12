@@ -202,7 +202,7 @@ impl Report for LibTestReport {
         }
     }
     fn done(&mut self) {
-        if self.failed.len() > 0 {
+        if !self.failed.is_empty() {
             writeln!(self.writer.out, "\nfailures:\n").unwrap();
 
             for task in self.failed.iter() {
@@ -215,7 +215,7 @@ impl Report for LibTestReport {
                         out
                     )
                     .unwrap();
-                    if !out.ends_with("\n") {
+                    if !out.ends_with('\n') {
                         self.writer.newline();
                     }
                 }
@@ -228,7 +228,7 @@ impl Report for LibTestReport {
                         err,
                     )
                     .unwrap();
-                    if !err.ends_with("\n") {
+                    if !err.ends_with('\n') {
                         self.writer.newline();
                     }
                 }
@@ -243,7 +243,7 @@ impl Report for LibTestReport {
 
         self.writer.newline();
         write!(self.writer.out, "test result: ").unwrap();
-        let (status, color) = if self.failed.len() > 0 {
+        let (status, color) = if !self.failed.is_empty() {
             ("FAILED", BRIGHT_RED)
         } else {
             ("ok", BRIGHT_GREEN)

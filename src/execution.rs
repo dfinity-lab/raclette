@@ -253,7 +253,7 @@ fn skip_task(task: Task, reason: String) -> CompletedTask {
 
 pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
     let timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT);
-    let jobs = config.jobs.unwrap_or_else(|| num_cpus::get());
+    let jobs = config.jobs.unwrap_or_else(num_cpus::get);
     let poll_timeout = Duration::from_millis(100);
 
     let mut poll = Poll::new().expect("failed to create poll");

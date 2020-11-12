@@ -17,6 +17,15 @@ impl Default for When {
     }
 }
 
+impl When {
+    fn merge(l: When, r: When) -> When {
+        match l {
+            When::Auto => r,
+            _ => l,
+        }
+    }
+}
+
 /// Enumerates all the formats that can be used to report test results.
 #[derive(PartialEq, Clone, Copy)]
 pub enum Format {
@@ -31,6 +40,15 @@ pub enum Format {
 impl Default for Format {
     fn default() -> Self {
         Self::Auto
+    }
+}
+
+impl Format {
+    fn merge(l: Format, r: Format) -> Format {
+        match l {
+            Format::Auto => r,
+            _ => l,
+        }
     }
 }
 
@@ -119,7 +137,7 @@ impl Config {
         let timeout = args
             .opt_value_from_str(["-t", "--timeout"])
             .map_err(|err| convert_error(err, "timeout"))?
-            .map(|secs: u64| Duration::from_secs(secs));
+            .map(Duration::from_secs);
 
         let color = args
             .opt_value_from_fn(["-c", "--color"], parse_when)
@@ -157,5 +175,15 @@ impl Config {
             jobs,
             format,
         })
+    }
+
+    pub fn merge(self, other: Config) -> Config {
+        Config {
+            filter: self.filter.or(other.filter),
+            timeout: self.timeout.or(other.timeout),
+            color: When::merge(self.color, other.color),
+            jobs: self.jobs.or(other.jobs),
+            format: Format::merge(self.format, other.format),
+        }
     }
 }
