@@ -54,23 +54,11 @@ impl Format {
 
 #[derive(Default)]
 pub struct Config {
-    /// Filter controls which tests are to be executed.
-    ///
-    /// If set, only tests having name containing the filter (in at
-    /// least one component of the name: either suite or test name)
-    /// will be executed.
-    pub filter: Option<String>,
-    /// The time limit for execution of a single test.  If specified,
-    /// this time limit is universal: all tests will inherit this time
-    /// limit, even if some of them have a different value specified
-    /// explicitly in code.
-    pub timeout: Option<Duration>,
-    /// Control when colored output is used.
-    pub color: When,
-    /// How many tests to execute in parallel.
-    pub jobs: Option<usize>,
-    /// Which format to use to report test results.
-    pub format: Format,
+    pub(crate) filter: Option<String>,
+    pub(crate) timeout: Option<Duration>,
+    pub(crate) color: When,
+    pub(crate) jobs: Option<usize>,
+    pub(crate) format: Format,
 }
 
 pub enum ConfigParseError {
@@ -128,6 +116,8 @@ fn convert_error(err: ArgsError, what: &str) -> ConfigParseError {
 }
 
 impl Config {
+
+    /// Parses configuration from command line flags.
     pub fn from_args() -> Result<Self, ConfigParseError> {
         let mut args = pico_args::Arguments::from_env();
         if args.contains(["-h", "--help"]) {
@@ -177,6 +167,8 @@ impl Config {
         })
     }
 
+    /// Merges two configurations by copying values of all unset
+    /// fields in `self` from `other`.
     pub fn merge(self, other: Config) -> Config {
         Config {
             filter: self.filter.or(other.filter),
@@ -185,5 +177,44 @@ impl Config {
             jobs: self.jobs.or(other.jobs),
             format: Format::merge(self.format, other.format),
         }
+    }
+
+    /// Sets the filter controlling which tests are to be executed.
+    ///
+    /// If set, only tests having name containing the filter (in at
+    /// least one component of the name: either suite or test name)
+    /// will be executed.
+    pub fn filter(mut self, filter: String) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Sets the time limit for execution of a single test.  If
+    /// specified, this time limit is universal: all tests will
+    /// inherit this time limit, even if some of them have a different
+    /// value specified explicitly in code.
+    pub fn timeout(mut self, d: Duration) -> Self {
+        self.timeout = Some(d);
+        self
+    }
+
+    /// Controls if colored output is used.
+    pub fn color(mut self, when: When) -> Self {
+        self.color = when;
+        self
+    }
+
+    /// Sets the upper limit on the number tests that can be executed
+    /// in parallel.
+    pub fn jobs(mut self, num_jobs: usize) -> Self {
+        self.jobs = Some(num_jobs);
+        self
+    }
+
+    /// Sets the format that should be used for reporting test
+    /// results.
+    pub fn format(mut self, fmt: Format) -> Self {
+        self.format = fmt;
+        self
     }
 }
