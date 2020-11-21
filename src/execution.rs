@@ -87,26 +87,29 @@ pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
     }
 
     fn go(
-        f: &Option<String>,
+        filter: &Option<String>,
+        config: &Config,
         t: TestTree,
         mut path: Vec<String>,
         buf: &mut Vec<Task>,
         parent_opts: Options,
     ) {
+        let skip_filter_applies = config.skip_filters.iter().any(|f| t.name().contains(f));
+
         match t {
             TestTree(TreeNode::Leaf {
                 name,
                 assertion,
                 options,
             }) => {
-                if !matches(&name, f) {
+                if !matches(&name, filter) || skip_filter_applies {
                     return;
                 }
                 path.push(name);
                 buf.push(Task {
                     work: assertion,
                     full_name: path,
-                    options: Options::inherit(options, parent_opts),
+                    options: options.inherit(parent_opts),
                 })
             }
             TestTree(TreeNode::Fork {
@@ -114,16 +117,16 @@ pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
                 tests,
                 options,
             }) => {
-                let effective_opts = Options::inherit(options, parent_opts);
-                if matches(&name, f) {
+                let effective_opts = options.inherit(parent_opts);
+                if matches(&name, filter) && !skip_filter_applies {
                     path.push(name);
                     for t in tests {
-                        go(&None, t, path.clone(), buf, effective_opts.clone());
+                        go(&None, config, t, path.clone(), buf, effective_opts.clone());
                     }
-                } else {
+                } else if !skip_filter_applies {
                     path.push(name);
                     for t in tests {
-                        go(f, t, path.clone(), buf, effective_opts.clone());
+                        go(filter, config, t, path.clone(), buf, effective_opts.clone());
                     }
                 }
             }
@@ -131,7 +134,14 @@ pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
     }
 
     let mut plan = Vec::new();
-    go(&config.filter, t, Vec::new(), &mut plan, Options::default());
+    go(
+        &config.filter,
+        &config,
+        t,
+        Vec::new(),
+        &mut plan,
+        Options::default(),
+    );
     plan
 }
 
@@ -186,7 +196,6 @@ fn launch(task: Task) -> RunningTask {
         stderr_buf: Vec::new(),
     }
 }
-
 fn make_token(pid: Pid, source: InputSource) -> Token {
     match source {
         InputSource::Stdout => Token((pid.as_raw() as usize) << 1),

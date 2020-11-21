@@ -55,6 +55,7 @@ impl Format {
 #[derive(Default)]
 pub struct Config {
     pub(crate) filter: Option<String>,
+    pub(crate) skip_filters: Vec<String>,
     pub(crate) timeout: Option<Duration>,
     pub(crate) color: When,
     pub(crate) jobs: Option<usize>,
@@ -73,12 +74,14 @@ pub(crate) fn produce_help() -> String {
         r#"Usage: {} [OPTIONS] [TESTNAME]
 
 Options:
-  -t, --timeout[=NSEC]     specify test execution timeout to be NSEC seconds
-  -c, --color[=WHEN]       colorize the output, WHEN can be
+      --skip FILTER        skip tests whose names contain FILTER
+                           (this flag can be used multiple times)
+  -t, --timeout NSEC       specify test execution timeout to be NSEC seconds
+  -c, --color WHEN         colorize the output, WHEN can be
                            'auto' (default), 'always' or 'never'
-  -f, --format=[FMT]       output the test report in the specified format,
+  -f, --format FMT         output the test report in the specified format,
                            FMT can be 'auto' (default), 'libtest' or 'tap'
-  -j, --jobs
+  -j, --jobs NJOBS         run at most NJOBS tests in parallel
   -h, --help               display this help and exit
 "#,
         std::env::args().next().unwrap()
@@ -116,7 +119,6 @@ fn convert_error(err: ArgsError, what: &str) -> ConfigParseError {
 }
 
 impl Config {
-
     /// Parses configuration from command line flags.
     pub fn from_args() -> Result<Self, ConfigParseError> {
         let mut args = pico_args::Arguments::from_env();
@@ -143,6 +145,10 @@ impl Config {
             .opt_value_from_str(["-j", "--jobs"])
             .map_err(|err| convert_error(err, "jobs"))?;
 
+        let skip_filters = args
+            .values_from_str("--skip")
+            .map_err(|err| convert_error(err, "skip"))?;
+
         let positional_args = args.free().map_err(|err| match err {
             ArgsError::UnusedArgsLeft(args) => ConfigParseError::UnknownArgs(args),
             other => convert_error(other, "filter"),
@@ -160,6 +166,7 @@ impl Config {
 
         Ok(Self {
             filter,
+            skip_filters,
             timeout,
             color,
             jobs,
@@ -169,9 +176,12 @@ impl Config {
 
     /// Merges two configurations by copying values of all unset
     /// fields in `self` from `other`.
-    pub fn merge(self, other: Config) -> Config {
+    pub fn merge(mut self, mut other: Config) -> Config {
+        self.skip_filters.append(&mut other.skip_filters);
+
         Config {
             filter: self.filter.or(other.filter),
+            skip_filters: self.skip_filters,
             timeout: self.timeout.or(other.timeout),
             color: When::merge(self.color, other.color),
             jobs: self.jobs.or(other.jobs),
@@ -186,6 +196,15 @@ impl Config {
     /// will be executed.
     pub fn filter(mut self, filter: String) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    /// Sets the filters controlling which tests DO NOT run.
+    ///
+    /// If set, all the tests having name containing on of the filters
+    /// (in at least one component of the name) will be skipped.
+    pub fn skip_filters(mut self, filters: Vec<String>) -> Self {
+        self.skip_filters = filters;
         self
     }
 

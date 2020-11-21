@@ -11,15 +11,24 @@ type GenericAssertion = Box<dyn FnOnce() + std::panic::UnwindSafe + 'static>;
 
 pub struct TestTree(TreeNode);
 
+impl TestTree {
+    pub fn name(&self) -> &str {
+        match self.0 {
+            TreeNode::Leaf { ref name, .. } => name.as_str(),
+            TreeNode::Fork { ref name, .. } => name.as_str(),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct Options {
-    skip_reason: Option<String>,
+    pub(crate) skip_reason: Option<String>,
 }
 
 impl Options {
-    fn inherit(child: Options, parent: Options) -> Options {
+    fn inherit(self, parent: Options) -> Options {
         Options {
-            skip_reason: child.skip_reason.or(parent.skip_reason),
+            skip_reason: self.skip_reason.or(parent.skip_reason),
         }
     }
 }
