@@ -1,0 +1,16 @@
+name: presubmit
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+
+      - name: Build
+        uses: icepuma/rust-action@1.45.2
+        with:
+          args: cargo fmt -- --check && cargo clippy -- -Dwarnings && cargo build --tests
