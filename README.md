@@ -1,3 +1,5 @@
+![presubmit](https://github.com/dfinity-lab/raclette/workflows/presubmit/badge.svg?branch=master)
+
 # Raclette — tasty integration tests
 
 Raclette is an alternative Rust test framework for integration tests.
@@ -5,6 +7,7 @@ Raclette is an alternative Rust test framework for integration tests.
 The two main principles of Raclette's design:
 
   1. Tests are first-class objects, i.e., it's possible to manipulate them programmatically.
+
   2. Each test is executed in a separate process.
 
 ## Pros
@@ -36,4 +39,30 @@ The two main principles of Raclette's design:
 
   * This is not what most Rust programmers are familiar with.
 
+  * No IDE integration.
+
   * Defining Raclette tests requires a bit more configuration.
+
+## Wait, what's wrong with libtest again?
+
+Libtest is great for simple unit tests but starts to show its limits when one tries to test complex systems with it:
+
+  * The test driver might crash on you with no clues on which test causes the troubles:
+
+        test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+        error: test failed, to rerun pass '-p my-awesome-package --test tests'
+        Caused by:
+          process didn't exit successfully: `tests-75f270a85cc7dc45` (signal: 11, SIGSEGV: invalid memory reference)
+
+  * A failure of a single test can cause subsequent tests to fail as well, which complicates the search of the real cause:
+
+        thread 'worker:13' panicked at 'The RwLock is poisoned due to a writer panic.: "PoisonError { inner: .. }"', src/lib.rs:301:5
+
+  * The stdout/stderr capture doesn't work properly for test that spawn extra threads.
+    This might lead to a garbled output and complicate debugging.
+
+        test test::single_threaded ... ok
+        Hello from a background thread!
+        Look ma, cargo test can't capture me!
+
+        test test::multi_threaded ... ok
