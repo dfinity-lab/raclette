@@ -25,12 +25,14 @@ enum InputSource {
     Stderr,
 }
 
+/// A task to be executed as a test.
 pub struct Task {
     pub full_name: Vec<String>,
     work: super::GenericAssertion,
     options: Options,
 }
 
+/// A task that has just been spawned and started executing.
 struct RunningTask {
     full_name: Vec<String>,
     pid: Pid,
@@ -41,6 +43,7 @@ struct RunningTask {
     stderr_buf: Vec<u8>,
 }
 
+/// A task that is being observed by the test driver.
 struct ObservedTask {
     full_name: Vec<String>,
     pid: Pid,
@@ -48,10 +51,18 @@ struct ObservedTask {
     stdout_pipe: Option<pipe::Receiver>,
     stderr_pipe: Option<pipe::Receiver>,
     status_and_duration: Option<(Status, Duration)>,
+    // Part of the stderr/stdout of the task that has already been
+    // captured.
     stdout_buf: Vec<u8>,
     stderr_buf: Vec<u8>,
+    // Offset of the first byte in the captured output that has not
+    // been displayed yet.  Only used if "nocapture" option is
+    // enabled.
+    stdout_offset: usize,
+    stderr_offset: usize,
 }
 
+/// A task that finished executing and is ready to be reported.
 #[derive(Debug)]
 pub struct CompletedTask {
     pub full_name: Vec<String>,
@@ -196,6 +207,7 @@ fn launch(task: Task) -> RunningTask {
         stderr_buf: Vec::new(),
     }
 }
+
 fn make_token(pid: Pid, source: InputSource) -> Token {
     match source {
         InputSource::Stdout => Token((pid.as_raw() as usize) << 1),
@@ -247,6 +259,8 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
         status_and_duration: None,
         stdout_buf,
         stderr_buf,
+        stdout_offset: 0,
+        stderr_offset: 0,
     }
 }
 
@@ -257,6 +271,29 @@ fn skip_task(task: Task, reason: String) -> CompletedTask {
         stdout: vec![],
         stderr: vec![],
         status: Status::Skipped(reason),
+    }
+}
+
+/// Displays as many complete lines from "buf" as possible starting
+/// from "pos".  The pos is advanced to the beginning of the last
+/// incomplete line.
+fn display_lines(buf: &Vec<u8>, pos: &mut usize) {
+    for i in (*pos..buf.len()).rev() {
+        if buf[i] == b'\n' {
+            print!("{}", String::from_utf8_lossy(&buf[*pos..=i]));
+            *pos = i + 1;
+            return;
+        }
+    }
+}
+
+/// Output the remaining part of the buffer, assuming that it ends
+/// with an incomplete line.
+fn flush_output(buf: &Vec<u8>, pos: &mut usize) {
+    let n = buf.len();
+    if *pos < n {
+        println!("{}", String::from_utf8_lossy(&buf[*pos..n]));
+        *pos = n;
     }
 }
 
@@ -311,9 +348,21 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
                         if let Some(ref mut pipe) = observed_task.stdout_pipe {
                             let n = pipe.read(&mut buf).expect("failed to read STDOUT");
                             observed_task.stdout_buf.extend_from_slice(&buf[0..n]);
+                            if config.nocapture {
+                                display_lines(
+                                    &observed_task.stdout_buf,
+                                    &mut observed_task.stdout_offset,
+                                );
+                            }
                         }
                     }
                     if event.is_read_closed() {
+                        if config.nocapture {
+                            flush_output(
+                                &observed_task.stderr_buf,
+                                &mut observed_task.stdout_offset,
+                            );
+                        }
                         observed_task.stdout_pipe = None;
                     }
                 }
@@ -322,9 +371,21 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
                         if let Some(ref mut pipe) = observed_task.stderr_pipe {
                             let n = pipe.read(&mut buf).expect("failed to read STDERR");
                             observed_task.stderr_buf.extend_from_slice(&buf[0..n]);
+                            if config.nocapture {
+                                display_lines(
+                                    &observed_task.stderr_buf,
+                                    &mut observed_task.stderr_offset,
+                                );
+                            }
                         }
                     }
                     if event.is_read_closed() {
+                        if config.nocapture {
+                            flush_output(
+                                &observed_task.stderr_buf,
+                                &mut observed_task.stderr_offset,
+                            );
+                        }
                         observed_task.stderr_pipe = None;
                     }
                 }

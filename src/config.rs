@@ -60,6 +60,7 @@ pub struct Config {
     pub(crate) color: When,
     pub(crate) jobs: Option<usize>,
     pub(crate) format: Format,
+    pub(crate) nocapture: bool,
 }
 
 pub enum ConfigParseError {
@@ -74,15 +75,23 @@ pub(crate) fn produce_help() -> String {
         r#"Usage: {} [OPTIONS] [TESTNAME]
 
 Options:
-      --skip FILTER        skip tests whose names contain FILTER
+      --skip FILTER        Skip tests whose names contain FILTER
                            (this flag can be used multiple times)
-  -t, --timeout NSEC       specify test execution timeout to be NSEC seconds
-  -c, --color WHEN         colorize the output, WHEN can be
+
+      --nocapture          Print output of each task directly as soon
+                           as it arrives
+
+  -t, --timeout NSEC       Specify test execution timeout to be NSEC seconds
+
+  -c, --color WHEN         Colorize the output, WHEN can be
                            'auto' (default), 'always' or 'never'
-  -f, --format FMT         output the test report in the specified format,
+
+  -f, --format FMT         Output the test report in the specified format,
                            FMT can be 'auto' (default), 'libtest' or 'tap'
-  -j, --jobs NJOBS         run at most NJOBS tests in parallel
-  -h, --help               display this help and exit
+
+  -j, --jobs NJOBS         Run at most NJOBS tests in parallel
+
+  -h, --help               Display this help and exit
 "#,
         std::env::args().next().unwrap()
     )
@@ -149,6 +158,8 @@ impl Config {
             .values_from_str("--skip")
             .map_err(|err| convert_error(err, "skip"))?;
 
+        let nocapture = args.contains("--nocapture");
+
         let positional_args = args.free().map_err(|err| match err {
             ArgsError::UnusedArgsLeft(args) => ConfigParseError::UnknownArgs(args),
             other => convert_error(other, "filter"),
@@ -171,6 +182,7 @@ impl Config {
             color,
             jobs,
             format,
+            nocapture,
         })
     }
 
@@ -186,6 +198,7 @@ impl Config {
             color: When::merge(self.color, other.color),
             jobs: self.jobs.or(other.jobs),
             format: Format::merge(self.format, other.format),
+            nocapture: self.nocapture || other.nocapture,
         }
     }
 
