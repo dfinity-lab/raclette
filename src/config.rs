@@ -249,4 +249,10 @@ impl Config {
         self.format = fmt;
         self
     }
+
+    /// Enable printing of test output directly as soon as it arrives.
+    pub fn nocapture(mut self) -> Self {
+        self.nocapture = true;
+        self
+    }
 }
