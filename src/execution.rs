@@ -192,7 +192,15 @@ fn launch(task: Task) -> RunningTask {
             // We create a new process group for the child to be able
             // to kill all the processes spawned by the test if the
             // test times out.
-            unistd::setpgid(child, child).expect("failed to set PGID of the child");
+            match unistd::setpgid(child, child) {
+                // It might happen that the child process completes
+                // before parent calls setpgid.  In this case the call
+                // will fail with ESRCH errno, which can be safely
+                // ignored.
+                Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => (),
+                Err(e) => panic!("failed to set PGID of the child: {}", e),
+                Ok(()) => (),
+            }
             child
         }
     };
