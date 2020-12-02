@@ -277,7 +277,7 @@ fn skip_task(task: Task, reason: String) -> CompletedTask {
 /// Displays as many complete lines from "buf" as possible starting
 /// from "pos".  The pos is advanced to the beginning of the last
 /// incomplete line.
-fn display_lines(buf: &Vec<u8>, pos: &mut usize) {
+fn display_lines(buf: &[u8], pos: &mut usize) {
     for i in (*pos..buf.len()).rev() {
         if buf[i] == b'\n' {
             print!("{}", String::from_utf8_lossy(&buf[*pos..=i]));
@@ -289,7 +289,7 @@ fn display_lines(buf: &Vec<u8>, pos: &mut usize) {
 
 /// Output the remaining part of the buffer, assuming that it ends
 /// with an incomplete line.
-fn flush_output(buf: &Vec<u8>, pos: &mut usize) {
+fn flush_output(buf: &[u8], pos: &mut usize) {
     let n = buf.len();
     if *pos < n {
         println!("{}", String::from_utf8_lossy(&buf[*pos..n]));
