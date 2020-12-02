@@ -2,39 +2,59 @@ use crate::{
     config::When,
     execution::{CompletedTask, Report, Status, Task},
 };
-use std::io::Stdout;
+use std::io::{self, Write};
 use term::color::{Color, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW};
 
 pub struct ColorWriter {
-    out: Box<term::StdoutTerminal>,
+    out: Option<Box<term::StdoutTerminal>>,
     use_color: bool,
 }
 
 impl ColorWriter {
     pub fn new(color: When) -> Self {
-        let out = term::stdout().unwrap();
+        let out = term::stdout();
         let use_color = match color {
             When::Never => false,
-            When::Always | When::Auto => out.supports_color() && out.supports_reset(),
+            When::Always | When::Auto => match out {
+                Some(ref t) => t.supports_color() && t.supports_reset(),
+                None => false,
+            },
         };
         Self { out, use_color }
     }
 
     pub fn newline(&mut self) {
-        writeln!(self.out).unwrap();
+        writeln!(self).unwrap();
     }
 
-    pub fn with_color(
-        &mut self,
-        color: Color,
-        f: impl FnOnce(&mut dyn term::Terminal<Output = Stdout>),
-    ) {
-        if self.use_color {
-            self.out.fg(color).unwrap();
-            f(&mut *self.out);
-            self.out.reset().unwrap();
-        } else {
-            f(&mut *self.out);
+    pub fn with_color(&mut self, color: Color, f: impl FnOnce(&mut dyn Write)) {
+        match self.out {
+            Some(ref mut t) => {
+                if self.use_color {
+                    t.fg(color).unwrap();
+                    f(t.get_mut());
+                    t.reset().unwrap();
+                } else {
+                    f(t.get_mut());
+                }
+            }
+            None => f(&mut io::stdout()),
+        }
+    }
+}
+
+impl Write for ColorWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self.out {
+            Some(ref mut t) => t.write(buf),
+            None => io::stdout().write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self.out {
+            Some(ref mut t) => t.flush(),
+            None => io::stdout().flush(),
         }
     }
 }
@@ -60,8 +80,8 @@ impl TapReport {
 
 impl Report for TapReport {
     fn init(&mut self, plan: &[Task]) {
-        writeln!(self.writer.out, "TAP version 13").unwrap();
-        writeln!(self.writer.out, "1..{}", plan.len()).unwrap();
+        writeln!(self.writer, "TAP version 13").unwrap();
+        writeln!(self.writer, "1..{}", plan.len()).unwrap();
         self.total = plan.len();
     }
 
@@ -84,7 +104,7 @@ impl Report for TapReport {
         });
 
         writeln!(
-            self.writer.out,
+            self.writer,
             "{} - {}{}",
             self.count,
             task.name(),
@@ -94,11 +114,11 @@ impl Report for TapReport {
 
         match task.status {
             Status::Success => {
-                writeln!(self.writer.out, "# completed in {:?}", task.duration).unwrap();
+                writeln!(self.writer, "# completed in {:?}", task.duration).unwrap();
             }
             Status::Failure(code) => {
                 writeln!(
-                    self.writer.out,
+                    self.writer,
                     "# process returned {} after {:?}",
                     code, task.duration
                 )
@@ -106,29 +126,29 @@ impl Report for TapReport {
             }
             Status::Signaled(signame) => {
                 writeln!(
-                    self.writer.out,
+                    self.writer,
                     "# process was killed with {} after {:?}",
                     signame, task.duration
                 )
                 .unwrap();
             }
             Status::Timeout => {
-                writeln!(self.writer.out, "# timed out after {:?}", task.duration).unwrap();
+                writeln!(self.writer, "# timed out after {:?}", task.duration).unwrap();
             }
             Status::Skipped(_) => (),
         }
 
         if !ok {
             if !task.stdout.is_empty() {
-                writeln!(self.writer.out, "# --- stdout ---").unwrap();
+                writeln!(self.writer, "# --- stdout ---").unwrap();
                 for line in task.stdout_as_string().lines() {
-                    writeln!(self.writer.out, "# {}", line).unwrap();
+                    writeln!(self.writer, "# {}", line).unwrap();
                 }
             }
             if !task.stderr.is_empty() {
-                writeln!(self.writer.out, "# --- stderr ---").unwrap();
+                writeln!(self.writer, "# --- stderr ---").unwrap();
                 for line in task.stderr_as_string().lines() {
-                    writeln!(self.writer.out, "# {}", line).unwrap();
+                    writeln!(self.writer, "# {}", line).unwrap();
                 }
             }
         }
@@ -164,7 +184,7 @@ impl Report for LibTestReport {
     fn init(&mut self, plan: &[Task]) {
         let n = plan.len();
         writeln!(
-            self.writer.out,
+            self.writer,
             "running {} test{}",
             n,
             if n == 1 { "" } else { "s" }
@@ -184,7 +204,7 @@ impl Report for LibTestReport {
             _ => (S::Failed, "FAILED", BRIGHT_RED),
         };
 
-        write!(self.writer.out, "test {} ... ", task.name()).unwrap();
+        write!(self.writer, "test {} ... ", task.name()).unwrap();
         self.writer.with_color(color, |out| {
             writeln!(out, "{}", status).unwrap();
         });
@@ -203,13 +223,13 @@ impl Report for LibTestReport {
     }
     fn done(&mut self) {
         if !self.failed.is_empty() {
-            writeln!(self.writer.out, "\nfailures:\n").unwrap();
+            writeln!(self.writer, "\nfailures:\n").unwrap();
 
             for task in self.failed.iter() {
                 if !task.stdout.is_empty() {
                     let out = task.stdout_as_string();
                     writeln!(
-                        self.writer.out,
+                        self.writer,
                         "---- test {} stdout ----\n{}",
                         task.name(),
                         out
@@ -222,7 +242,7 @@ impl Report for LibTestReport {
                 if !task.stderr.is_empty() {
                     let err = task.stderr_as_string();
                     writeln!(
-                        self.writer.out,
+                        self.writer,
                         "---- test {} stderr ----\n{}",
                         task.name(),
                         err,
@@ -234,15 +254,15 @@ impl Report for LibTestReport {
                 }
             }
 
-            writeln!(self.writer.out, "\nfailures:").unwrap();
+            writeln!(self.writer, "\nfailures:").unwrap();
 
             for task in self.failed.iter() {
-                writeln!(self.writer.out, "    {}", task.name()).unwrap();
+                writeln!(self.writer, "    {}", task.name()).unwrap();
             }
         }
 
         self.writer.newline();
-        write!(self.writer.out, "test result: ").unwrap();
+        write!(self.writer, "test result: ").unwrap();
         let (status, color) = if !self.failed.is_empty() {
             ("FAILED", BRIGHT_RED)
         } else {
@@ -253,7 +273,7 @@ impl Report for LibTestReport {
             .with_color(color, |out| write!(out, "{}", status).unwrap());
 
         writeln!(
-            self.writer.out,
+            self.writer,
             ". {} passed; {} failed; {} ignored;\n",
             self.passed,
             self.failed.len(),
