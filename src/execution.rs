@@ -285,10 +285,10 @@ fn skip_task(task: Task, reason: String) -> CompletedTask {
 /// Displays as many complete lines from "buf" as possible starting
 /// from "pos".  The pos is advanced to the beginning of the last
 /// incomplete line.
-fn display_lines(buf: &[u8], pos: &mut usize) {
+fn display_lines(wrt: &mut dyn Write, buf: &[u8], pos: &mut usize) {
     for i in (*pos..buf.len()).rev() {
         if buf[i] == b'\n' {
-            print!("{}", String::from_utf8_lossy(&buf[*pos..=i]));
+            write!(wrt, "{}", String::from_utf8_lossy(&buf[*pos..=i])).expect("Failed to write");
             *pos = i + 1;
             return;
         }
@@ -297,10 +297,10 @@ fn display_lines(buf: &[u8], pos: &mut usize) {
 
 /// Output the remaining part of the buffer, assuming that it ends
 /// with an incomplete line.
-fn flush_output(buf: &[u8], pos: &mut usize) {
+fn flush_output(wrt: &mut dyn Write, buf: &[u8], pos: &mut usize) {
     let n = buf.len();
     if *pos < n {
-        println!("{}", String::from_utf8_lossy(&buf[*pos..n]));
+        writeln!(wrt, "{}", String::from_utf8_lossy(&buf[*pos..n])).expect("Failed to writeln");
         *pos = n;
     }
 }
@@ -358,6 +358,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
                             observed_task.stdout_buf.extend_from_slice(&buf[0..n]);
                             if config.nocapture {
                                 display_lines(
+                                    &mut std::io::stdout(),
                                     &observed_task.stdout_buf,
                                     &mut observed_task.stdout_offset,
                                 );
@@ -367,6 +368,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
                     if event.is_read_closed() {
                         if config.nocapture {
                             flush_output(
+                                &mut std::io::stdout(),
                                 &observed_task.stderr_buf,
                                 &mut observed_task.stdout_offset,
                             );
@@ -381,6 +383,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
                             observed_task.stderr_buf.extend_from_slice(&buf[0..n]);
                             if config.nocapture {
                                 display_lines(
+                                    &mut std::io::stderr(),
                                     &observed_task.stderr_buf,
                                     &mut observed_task.stderr_offset,
                                 );
@@ -390,6 +393,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
                     if event.is_read_closed() {
                         if config.nocapture {
                             flush_output(
+                                &mut std::io::stderr(),
                                 &observed_task.stderr_buf,
                                 &mut observed_task.stderr_offset,
                             );
