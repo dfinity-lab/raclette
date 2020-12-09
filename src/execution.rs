@@ -1,6 +1,7 @@
 use crate::{config::Config, Options, TestTree, TreeNode};
 use mio::unix::pipe;
 use mio::{Events, Interest, Poll, Token};
+use mio_signals as msig;
 use nix::sys::signal::{killpg, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{self, fork, ForkResult, Pid};
@@ -10,6 +11,9 @@ use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The token used to catch signals.
+const SIGNAL_TOKEN: Token = Token(0);
 
 #[derive(Debug, PartialEq)]
 pub enum Status {
@@ -311,6 +315,13 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
     let poll_timeout = Duration::from_millis(100);
 
     let mut poll = Poll::new().expect("failed to create poll");
+    let mut signals = msig::Signals::new(msig::SignalSet::all())
+        .expect("failed to create mio_signals::Signals object");
+
+    poll.registry()
+        .register(&mut signals, SIGNAL_TOKEN, Interest::READABLE)
+        .expect("failed to register signal handler in a Poll registry");
+
     let mut events = Events::with_capacity(jobs * 2);
     let mut buf = vec![0u8; 4096];
 
@@ -344,6 +355,28 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
             .expect("failed to poll");
 
         for event in &events {
+            if event.token() == SIGNAL_TOKEN {
+                match signals.receive().expect("failed to receive signal") {
+                    Some(sig) => {
+                        eprintln!(
+                            "Received signal {:?}, canceling {} tasks...",
+                            sig,
+                            observed_tasks.len()
+                        );
+
+                        for pid in observed_tasks.keys() {
+                            eprintln!("Killing process group {:?}...", *pid);
+                            let _ = killpg(*pid, Signal::SIGKILL);
+                        }
+
+                        std::process::exit(1)
+                    }
+                    None => {
+                        continue;
+                    }
+                }
+            }
+
             let (pid, src) = split_token(event.token());
 
             let observed_task = observed_tasks
