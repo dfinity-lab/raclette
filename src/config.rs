@@ -33,6 +33,9 @@ pub enum Format {
     Auto,
     /// Use the same format that libtest uses.
     LibTest,
+    /// Use the Cargo JSON format.
+    /// See https://github.com/dfinity-lab/raclette/issues/10 for pointers.
+    Json,
     /// Use the format specified on http://testanything.org.
     Tap,
 }
@@ -87,7 +90,11 @@ Options:
                            'auto' (default), 'always' or 'never'
 
   -f, --format FMT         Output the test report in the specified format,
-                           FMT can be 'auto' (default), 'libtest' or 'tap'
+                           FMT can be
+                             'auto'    (default)
+                             'libtest' (emulate the output produced by cargo test)
+                             'json'    (libtest JSON format)
+                             'tap'     (Test Anything Protocol, http://testanything.org)
 
   -j, --jobs NJOBS         Run at most NJOBS tests in parallel
 
@@ -110,6 +117,7 @@ fn parse_format(input: &str) -> Result<Format, String> {
     match input {
         "auto" => Ok(Format::Auto),
         "libtest" => Ok(Format::LibTest),
+        "json" => Ok(Format::Json),
         "tap" => Ok(Format::Tap),
         _ => Err(format!("unsupported FMT value: {}", input)),
     }

@@ -36,6 +36,12 @@ pub struct Task {
     options: Options,
 }
 
+impl Task {
+    pub fn name(&self) -> String {
+        self.full_name.join("::")
+    }
+}
+
 /// A task that has just been spawned and started executing.
 struct RunningTask {
     full_name: Vec<String>,
@@ -92,6 +98,7 @@ impl CompletedTask {
 
 pub trait Report {
     fn init(&mut self, plan: &[Task]);
+    fn start(&mut self, task_name: String);
     fn report(&mut self, result: CompletedTask);
     fn done(&mut self);
 }
@@ -336,6 +343,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
         while observed_tasks.len() < jobs {
             match tasks.pop() {
                 Some(mut task) => {
+                    report.start(task.name());
                     if let Some(reason) = task.options.skip_reason.take() {
                         report.report(skip_task(task, reason));
                         continue;
