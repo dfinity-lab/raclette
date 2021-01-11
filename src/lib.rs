@@ -147,6 +147,7 @@ pub fn default_main(default_config: Config, tree: TestTree) {
     let writer = report::ColorWriter::new(config.color);
     let mut report: Box<dyn execution::Report> = match config.format {
         Format::Auto | Format::LibTest => Box::new(report::LibTestReport::new(writer)),
+        Format::Json => Box::new(report::JsonReport::new(writer)),
         Format::Tap => Box::new(report::TapReport::new(writer)),
     };
     let plan = execution::make_plan(&config, tree);

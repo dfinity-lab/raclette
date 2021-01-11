@@ -2,8 +2,39 @@ use crate::{
     config::When,
     execution::{CompletedTask, Report, Status, Task},
 };
+use std::borrow::Cow;
 use std::io::{self, Write};
+use std::time::Duration;
 use term::color::{Color, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW};
+
+#[derive(Default)]
+pub struct TestStats {
+    pub total: usize,
+    pub ok: usize,
+    pub failed: usize,
+    pub ignored: usize,
+}
+
+impl TestStats {
+    pub fn update(&mut self, task: &CompletedTask) {
+        self.total += 1;
+        match task.status {
+            Status::Success => {
+                self.ok += 1;
+            }
+            Status::Failure(_) | Status::Signaled(_) | Status::Timeout => {
+                self.failed += 1;
+            }
+            Status::Skipped(_) => {
+                self.ignored += 1;
+            }
+        }
+    }
+
+    pub fn ok(&self) -> bool {
+        self.failed == 0
+    }
+}
 
 pub struct ColorWriter {
     out: Option<Box<term::StdoutTerminal>>,
@@ -84,6 +115,8 @@ impl Report for TapReport {
         writeln!(self.writer, "1..{}", plan.len()).unwrap();
         self.total = plan.len();
     }
+
+    fn start(&mut self, _name: String) {}
 
     fn report(&mut self, task: CompletedTask) {
         self.count += 1;
@@ -191,6 +224,9 @@ impl Report for LibTestReport {
         )
         .unwrap();
     }
+
+    fn start(&mut self, _name: String) {}
+
     fn report(&mut self, task: CompletedTask) {
         enum S {
             Ok,
@@ -221,6 +257,7 @@ impl Report for LibTestReport {
             }
         }
     }
+
     fn done(&mut self) {
         if !self.failed.is_empty() {
             writeln!(self.writer, "\nfailures:\n").unwrap();
@@ -280,5 +317,217 @@ impl Report for LibTestReport {
             self.ignored
         )
         .unwrap();
+    }
+}
+
+pub struct JsonReport {
+    writer: ColorWriter,
+    stats: TestStats,
+}
+
+impl JsonReport {
+    pub fn new(writer: ColorWriter) -> Self {
+        Self {
+            writer,
+            stats: Default::default(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_event(
+        &mut self,
+        ty: &str,
+        name: &str,
+        evt: &str,
+        exec_time: Duration,
+        stdout: Cow<'_, str>,
+        stderr: Cow<'_, str>,
+        extra: Option<&str>,
+    ) {
+        // A doc test's name includes a filename which must be escaped for correct json.
+        write!(
+            self.writer,
+            r#"{{ "type": "{}", "name": "{}", "event": "{}", "exec_time": "{:.4}s""#,
+            ty,
+            EscapedString(name),
+            evt,
+            exec_time.as_secs_f64(),
+        )
+        .unwrap();
+
+        if !stdout.is_empty() {
+            write!(self.writer, r#", "stdout": "{}""#, EscapedString(stdout)).unwrap();
+        }
+        if !stderr.is_empty() {
+            write!(self.writer, r#", "stderr": "{}""#, EscapedString(stderr)).unwrap();
+        }
+        if let Some(extra) = extra {
+            write!(self.writer, r#", {}"#, extra).unwrap();
+        }
+        writeln!(self.writer, "}}").unwrap();
+    }
+}
+
+impl Report for JsonReport {
+    fn init(&mut self, plan: &[Task]) {
+        write!(
+            self.writer,
+            r#"{{ "type": "suite", "event": "started", "test_count": {} }}"#,
+            plan.len()
+        )
+        .unwrap();
+        writeln!(self.writer).unwrap();
+    }
+
+    fn start(&mut self, name: String) {
+        write!(
+            self.writer,
+            r#"{{ "type": "test", "event": "started", "name": "{}" }}"#,
+            EscapedString(name),
+        )
+        .unwrap();
+        writeln!(self.writer).unwrap();
+    }
+
+    fn report(&mut self, task: CompletedTask) {
+        self.stats.update(&task);
+        match task.status {
+            Status::Success => {
+                self.write_event(
+                    "test",
+                    task.name().as_str(),
+                    "ok",
+                    task.duration,
+                    task.stdout_as_string(),
+                    task.stderr_as_string(),
+                    None,
+                );
+            }
+            Status::Failure(ref code) => {
+                self.write_event(
+                    "test",
+                    task.name().as_str(),
+                    "failed",
+                    task.duration,
+                    task.stdout_as_string(),
+                    task.stderr_as_string(),
+                    Some(&format!(
+                        r#""reason": "test process exited with code {}""#,
+                        code
+                    )),
+                );
+            }
+            Status::Signaled(ref signame) => {
+                self.write_event(
+                    "test",
+                    task.name().as_str(),
+                    "failed",
+                    task.duration,
+                    task.stdout_as_string(),
+                    task.stderr_as_string(),
+                    Some(&format!(r#""reason": "killed by signal {}""#, signame)),
+                );
+            }
+            Status::Timeout => {
+                self.write_event(
+                    "test",
+                    task.name().as_str(),
+                    "failed",
+                    task.duration,
+                    task.stdout_as_string(),
+                    task.stderr_as_string(),
+                    Some(r#""reason": "time limit exceeded""#),
+                );
+            }
+            Status::Skipped(ref reason) => {
+                self.write_event(
+                    "test",
+                    task.name().as_str(),
+                    "ignored",
+                    task.duration,
+                    task.stdout_as_string(),
+                    task.stderr_as_string(),
+                    Some(&format!(r#""reason": "{}""#, EscapedString(reason),)),
+                );
+            }
+        }
+    }
+
+    fn done(&mut self) {
+        write!(
+            self.writer,
+            r#"{{ "type": "suite", "event": "{}", "passed": {}, "failed": {}, "ignored": {} }}"#,
+            if self.stats.ok() { "ok" } else { "failed" },
+            self.stats.ok,
+            self.stats.failed,
+            self.stats.ignored,
+        )
+        .unwrap();
+        writeln!(self.writer).unwrap();
+    }
+}
+
+struct EscapedString<S: AsRef<str>>(S);
+
+impl<S: AsRef<str>> std::fmt::Display for EscapedString<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        let mut start = 0;
+
+        for (i, byte) in self.0.as_ref().bytes().enumerate() {
+            let escaped = match byte {
+                b'"' => "\\\"",
+                b'\\' => "\\\\",
+                b'\x00' => "\\u0000",
+                b'\x01' => "\\u0001",
+                b'\x02' => "\\u0002",
+                b'\x03' => "\\u0003",
+                b'\x04' => "\\u0004",
+                b'\x05' => "\\u0005",
+                b'\x06' => "\\u0006",
+                b'\x07' => "\\u0007",
+                b'\x08' => "\\b",
+                b'\t' => "\\t",
+                b'\n' => "\\n",
+                b'\x0b' => "\\u000b",
+                b'\x0c' => "\\f",
+                b'\r' => "\\r",
+                b'\x0e' => "\\u000e",
+                b'\x0f' => "\\u000f",
+                b'\x10' => "\\u0010",
+                b'\x11' => "\\u0011",
+                b'\x12' => "\\u0012",
+                b'\x13' => "\\u0013",
+                b'\x14' => "\\u0014",
+                b'\x15' => "\\u0015",
+                b'\x16' => "\\u0016",
+                b'\x17' => "\\u0017",
+                b'\x18' => "\\u0018",
+                b'\x19' => "\\u0019",
+                b'\x1a' => "\\u001a",
+                b'\x1b' => "\\u001b",
+                b'\x1c' => "\\u001c",
+                b'\x1d' => "\\u001d",
+                b'\x1e' => "\\u001e",
+                b'\x1f' => "\\u001f",
+                b'\x7f' => "\\u007f",
+                _ => {
+                    continue;
+                }
+            };
+
+            if start < i {
+                f.write_str(&self.0.as_ref()[start..i])?;
+            }
+
+            f.write_str(escaped)?;
+
+            start = i + 1;
+        }
+
+        if start != self.0.as_ref().len() {
+            f.write_str(&self.0.as_ref()[start..])?;
+        }
+
+        Ok(())
     }
 }
