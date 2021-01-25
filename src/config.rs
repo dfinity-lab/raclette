@@ -153,7 +153,7 @@ impl Config {
 
     // Parses arguments from whathever pico_arg::Arguments
     fn from_pico_args(args: pico_args::Arguments) -> Result<Self, ConfigParseError> {
-        let mut args = args.clone(); // this clone is here to enable the args.free() in line 182
+        let mut args = args;
 
         if args.contains(["-h", "--help"]) {
             return Err(ConfigParseError::HelpRequested);
