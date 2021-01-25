@@ -1,5 +1,5 @@
 use pico_args::Error as ArgsError;
-use std::time::Duration;
+use std::{ffi::OsString, time::Duration};
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum When {
@@ -138,7 +138,23 @@ fn convert_error(err: ArgsError, what: &str) -> ConfigParseError {
 impl Config {
     /// Parses configuration from command line flags.
     pub fn from_args() -> Result<Self, ConfigParseError> {
-        let mut args = pico_args::Arguments::from_env();
+        let args = pico_args::Arguments::from_env();
+        Config::from_pico_args(args)
+    }
+
+    /// Parses configuration from a vector of [OsString]s, note that the
+    /// executable name *must be removed*. This is usefull when calling raclette
+    /// from a custom main that wants to split options to raclette from
+    /// options to the test. Refer to [pico_args::Arguments::from_vec] for further docs.
+    pub fn from_vec(vargs: Vec<OsString>) -> Result<Self, ConfigParseError> {
+        let args = pico_args::Arguments::from_vec(vargs);
+        Config::from_pico_args(args)
+    }
+
+    // Parses arguments from whathever pico_arg::Arguments
+    fn from_pico_args(args: pico_args::Arguments) -> Result<Self, ConfigParseError> {
+        let mut args = args.clone(); // this clone is here to enable the args.free() in line 182
+
         if args.contains(["-h", "--help"]) {
             return Err(ConfigParseError::HelpRequested);
         }

@@ -115,8 +115,11 @@ pub fn should_panic(
     }
 }
 
+/// Runs raclette with a default config but reads the command line arguments
+/// and overrides settings from the default config. If this behavior is undesired
+/// refer to [default_main_no_config_override] instead.
 pub fn default_main(default_config: Config, tree: TestTree) {
-    use config::{ConfigParseError as E, Format};
+    use config::ConfigParseError as E;
 
     let override_config = Config::from_args().unwrap_or_else(|err| match err {
         E::HelpRequested => {
@@ -140,6 +143,12 @@ pub fn default_main(default_config: Config, tree: TestTree) {
     });
 
     let config = override_config.merge(default_config);
+    default_main_no_config_override(config, tree);
+}
+
+/// Runs raclette with a fixed configuration. Does not inspect command line options.
+pub fn default_main_no_config_override(config: Config, tree: TestTree) {
+    use config::Format;
 
     let writer = report::ColorWriter::new(config.color);
     let mut report: Box<dyn execution::Report> = match config.format {
