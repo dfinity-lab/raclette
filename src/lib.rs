@@ -3,6 +3,8 @@ mod execution;
 mod report;
 
 pub use config::Config;
+pub use execution::CompletedTask;
+pub use execution::Status;
 
 use std::any::Any;
 use std::string::ToString;
@@ -120,7 +122,7 @@ pub fn should_panic(
 /// refer to [default_main_no_config_override] instead.
 ///
 /// Returns a list of [execution::TaskResult] for each test that was ran.
-pub fn default_main(default_config: Config, tree: TestTree) -> Vec<execution::TaskResult> {
+pub fn default_main(default_config: Config, tree: TestTree) -> Vec<execution::CompletedTask> {
     use config::ConfigParseError as E;
 
     let override_config = Config::from_args().unwrap_or_else(|err| match err {
@@ -152,7 +154,7 @@ pub fn default_main(default_config: Config, tree: TestTree) -> Vec<execution::Ta
 pub fn default_main_no_config_override(
     config: Config,
     tree: TestTree,
-) -> Vec<execution::TaskResult> {
+) -> Vec<execution::CompletedTask> {
     use config::Format;
 
     let writer = report::ColorWriter::new(config.color);

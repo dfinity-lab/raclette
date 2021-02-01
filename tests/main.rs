@@ -33,7 +33,10 @@ fn tests() -> TestTree {
                 "arithmetics",
                 vec![
                     test_case("addition", || assert_eq!(4, 2 + 2)),
-                    test_case("bad math", || assert_eq!(47, 7 * 7)),
+                    test_case(
+                        "bad math",
+                        should_panic("assertion failed", || assert_eq!(47, 7 * 7)),
+                    ),
                     test_case(
                         "div by zero",
                         should_panic("zero", || {
@@ -54,5 +57,15 @@ fn tests() -> TestTree {
 }
 
 fn main() {
-    default_main(Config::default(), tests());
+    let completed_tasks = default_main(Config::default(), tests());
+    let failed_tasks: Vec<CompletedTask> = completed_tasks
+        .into_iter()
+        .filter(|task| !task.status.is_success_or_skip())
+        .collect();
+
+    // In this particular test-suite, we expect two infinite loops to be stopped by raclette,
+    // in your case, you should probably ensure failed_tasks.len() == 0
+    if failed_tasks.len() != 2 {
+        std::process::exit(1);
+    }
 }
