@@ -497,7 +497,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) -
 
             task_results.push(TaskResult {
                 full_name: observed_task.full_name.clone(),
-                duration: duration.clone(),
+                duration,
                 status: status.clone(),
             });
 

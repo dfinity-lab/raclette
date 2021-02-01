@@ -54,5 +54,5 @@ fn tests() -> TestTree {
 }
 
 fn main() {
-    default_main(Config::default(), tests())
+    default_main(Config::default(), tests());
 }
