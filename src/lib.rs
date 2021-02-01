@@ -118,7 +118,9 @@ pub fn should_panic(
 /// Runs raclette with a default config but reads the command line arguments
 /// and overrides settings from the default config. If this behavior is undesired
 /// refer to [default_main_no_config_override] instead.
-pub fn default_main(default_config: Config, tree: TestTree) {
+///
+/// Returns a list of [execution::TaskResult] for each test that was ran.
+pub fn default_main(default_config: Config, tree: TestTree) -> Vec<execution::TaskResult> {
     use config::ConfigParseError as E;
 
     let override_config = Config::from_args().unwrap_or_else(|err| match err {
@@ -143,11 +145,14 @@ pub fn default_main(default_config: Config, tree: TestTree) {
     });
 
     let config = override_config.merge(default_config);
-    default_main_no_config_override(config, tree);
+    default_main_no_config_override(config, tree)
 }
 
 /// Runs raclette with a fixed configuration. Does not inspect command line options.
-pub fn default_main_no_config_override(config: Config, tree: TestTree) {
+pub fn default_main_no_config_override(
+    config: Config,
+    tree: TestTree,
+) -> Vec<execution::TaskResult> {
     use config::Format;
 
     let writer = report::ColorWriter::new(config.color);
@@ -158,5 +163,5 @@ pub fn default_main_no_config_override(config: Config, tree: TestTree) {
     };
     let plan = execution::make_plan(&config, tree);
 
-    execution::execute(&config, plan, &mut *report);
+    execution::execute(&config, plan, &mut *report)
 }

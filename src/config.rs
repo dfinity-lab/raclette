@@ -73,11 +73,7 @@ pub enum ConfigParseError {
     Unknown(String),
 }
 
-pub(crate) fn produce_help() -> String {
-    format!(
-        r#"Usage: {} [OPTIONS] [TESTNAME]
-
-Options:
+pub const HELP_STR: &str = r#"
       --skip FILTER        Skip tests whose names contain FILTER
                            (this flag can be used multiple times)
 
@@ -97,10 +93,19 @@ Options:
                              'tap'     (Test Anything Protocol, http://testanything.org)
 
   -j, --jobs NJOBS         Run at most NJOBS tests in parallel
+"#;
+
+pub(crate) fn produce_help() -> String {
+    format!(
+        r#"Usage: {} [OPTIONS] [TESTNAME]
+
+Options:
+{}
 
   -h, --help               Display this help and exit
 "#,
-        std::env::args().next().unwrap()
+        std::env::args().next().unwrap(),
+        HELP_STR
     )
 }
 

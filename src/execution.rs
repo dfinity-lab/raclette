@@ -15,7 +15,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The token used to catch signals.
 const SIGNAL_TOKEN: Token = Token(0);
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Status {
     Success,
     Failure(i32),
@@ -94,6 +94,15 @@ impl CompletedTask {
     pub fn name(&self) -> String {
         self.full_name.join("::")
     }
+}
+
+/// After a task finishes execution, it produces a result to be returned to
+/// raclette's caller.
+#[derive(Debug)]
+pub struct TaskResult {
+    pub full_name: Vec<String>,
+    pub duration: Duration,
+    pub status: Status,
 }
 
 pub trait Report {
@@ -316,7 +325,7 @@ fn flush_output(wrt: &mut dyn Write, buf: &[u8], pos: &mut usize) {
     }
 }
 
-pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
+pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) -> Vec<TaskResult> {
     let timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT);
     let jobs = config.jobs.unwrap_or_else(num_cpus::get);
     let poll_timeout = Duration::from_millis(100);
@@ -336,6 +345,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
 
     let mut observed_tasks = HashMap::<Pid, ObservedTask>::new();
     let mut completed_pids = Vec::<Pid>::new();
+    let mut task_results = Vec::<TaskResult>::new();
 
     tasks.reverse();
 
@@ -485,6 +495,12 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
             let observed_task = observed_tasks.remove(pid).unwrap();
             let (status, duration) = observed_task.status_and_duration.unwrap();
 
+            task_results.push(TaskResult {
+                full_name: observed_task.full_name.clone(),
+                duration: duration.clone(),
+                status: status.clone(),
+            });
+
             report.report(CompletedTask {
                 full_name: observed_task.full_name,
                 duration,
@@ -498,4 +514,5 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
     }
 
     report.done();
+    task_results
 }
