@@ -118,7 +118,7 @@ impl Report for TapReport {
 
     fn start(&mut self, _name: String) {}
 
-    fn report(&mut self, task: CompletedTask) {
+    fn report(&mut self, task: &CompletedTask) {
         self.count += 1;
         let (ok, suffix) = match &task.status {
             Status::Success => (true, None),
@@ -227,7 +227,7 @@ impl Report for LibTestReport {
 
     fn start(&mut self, _name: String) {}
 
-    fn report(&mut self, task: CompletedTask) {
+    fn report(&mut self, task: &CompletedTask) {
         enum S {
             Ok,
             Ignored,
@@ -253,7 +253,7 @@ impl Report for LibTestReport {
                 self.ignored += 1;
             }
             S::Failed => {
-                self.failed.push(task);
+                self.failed.push(task.clone());
             }
         }
     }
@@ -389,7 +389,7 @@ impl Report for JsonReport {
         writeln!(self.writer).unwrap();
     }
 
-    fn report(&mut self, task: CompletedTask) {
+    fn report(&mut self, task: &CompletedTask) {
         self.stats.update(&task);
         match task.status {
             Status::Success => {

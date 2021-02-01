@@ -15,13 +15,26 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The token used to catch signals.
 const SIGNAL_TOKEN: Token = Token(0);
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Status {
     Success,
     Failure(i32),
     Signaled(&'static str),
     Timeout,
     Skipped(String),
+}
+
+impl Status {
+    /// Returns whether a [Status] represents a non-failure. This includes
+    /// [Status::Success] and [Status::Skipped]. Anything else is a failure
+    /// of some sort.
+    pub fn is_ok(&self) -> bool {
+        match self {
+            Status::Success => true,
+            Status::Skipped(_) => true,
+            _ => false,
+        }
+    }
 }
 
 enum InputSource {
@@ -73,7 +86,7 @@ struct ObservedTask {
 }
 
 /// A task that finished executing and is ready to be reported.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompletedTask {
     pub full_name: Vec<String>,
     pub duration: Duration,
@@ -99,7 +112,7 @@ impl CompletedTask {
 pub trait Report {
     fn init(&mut self, plan: &[Task]);
     fn start(&mut self, task_name: String);
-    fn report(&mut self, result: CompletedTask);
+    fn report(&mut self, result: &CompletedTask);
     fn done(&mut self);
 }
 
@@ -316,7 +329,11 @@ fn flush_output(wrt: &mut dyn Write, buf: &[u8], pos: &mut usize) {
     }
 }
 
-pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
+pub fn execute(
+    config: &Config,
+    mut tasks: Vec<Task>,
+    report: &mut dyn Report,
+) -> Vec<CompletedTask> {
     let timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT);
     let jobs = config.jobs.unwrap_or_else(num_cpus::get);
     let poll_timeout = Duration::from_millis(100);
@@ -336,6 +353,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
 
     let mut observed_tasks = HashMap::<Pid, ObservedTask>::new();
     let mut completed_pids = Vec::<Pid>::new();
+    let mut task_results = Vec::<CompletedTask>::new();
 
     tasks.reverse();
 
@@ -345,7 +363,7 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
                 Some(mut task) => {
                     report.start(task.name());
                     if let Some(reason) = task.options.skip_reason.take() {
-                        report.report(skip_task(task, reason));
+                        report.report(&skip_task(task, reason));
                         continue;
                     }
 
@@ -485,17 +503,21 @@ pub fn execute(config: &Config, mut tasks: Vec<Task>, report: &mut dyn Report) {
             let observed_task = observed_tasks.remove(pid).unwrap();
             let (status, duration) = observed_task.status_and_duration.unwrap();
 
-            report.report(CompletedTask {
+            let completed_task = CompletedTask {
                 full_name: observed_task.full_name,
                 duration,
                 stdout: observed_task.stdout_buf,
                 stderr: observed_task.stderr_buf,
                 status,
-            });
+            };
+
+            report.report(&completed_task);
+            task_results.push(completed_task);
         }
 
         completed_pids.clear();
     }
 
     report.done();
+    task_results
 }
