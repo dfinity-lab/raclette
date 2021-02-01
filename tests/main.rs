@@ -60,7 +60,7 @@ fn main() {
     let completed_tasks = default_main(Config::default(), tests());
     let failed_tasks: Vec<CompletedTask> = completed_tasks
         .into_iter()
-        .filter(|task| !task.status.is_success_or_skip())
+        .filter(|task| !task.status.is_ok())
         .collect();
 
     // In this particular test-suite, we expect two infinite loops to be stopped by raclette,

@@ -25,7 +25,10 @@ pub enum Status {
 }
 
 impl Status {
-    pub fn is_success_or_skip(&self) -> bool {
+    /// Returns whether a [Status] represents a non-failure. This includes
+    /// [Status::Success] and [Status::Skipped]. Anything else is a failure
+    /// of some sort.
+    pub fn is_ok(&self) -> bool {
         match self {
             Status::Success => true,
             Status::Skipped(_) => true,
