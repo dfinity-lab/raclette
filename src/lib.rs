@@ -18,6 +18,7 @@ impl TestTree {
         match self.0 {
             TreeNode::Leaf { ref name, .. } => name.as_str(),
             TreeNode::Fork { ref name, .. } => name.as_str(),
+            TreeNode::Fixture { ref name, .. } => name.as_str(),
         }
     }
 }
@@ -45,13 +46,8 @@ pub fn fixture_assertion_erase<R: 'static>(
     Box::new(|any| f(any.downcast_ref().unwrap()))
 }
 
-pub fn fixture_setup_erase<R: 'static>(f: FixtureSetup<R>) -> FixtureSetup<dyn Any> {
-    Box::new(|| {
-        f().map(|r| {
-            let any_r: dyn Any = todo!();
-            Box::new(/* why doesn't any_r work here? */ todo!())
-        })
-    })
+pub fn fixture_setup_erase<R: Any + 'static>(f: FixtureSetup<R>) -> FixtureSetup<dyn Any> {
+    Box::new(|| f().map(|r| r as Box<dyn Any>))
 }
 
 pub struct FixtureTest<R> {
@@ -89,8 +85,8 @@ enum TreeNode {
 
 fn fixture<N: ToString, R: 'static>(
     name: N,
-    setup: FixtureSetup<R>,
-    teardown: FixtureTeardown<R>,
+    _setup: FixtureSetup<R>,
+    _teardown: FixtureTeardown<R>,
     steps: impl Iterator<Item = FixtureTest<R>>,
 ) -> TestTree {
     TestTree(TreeNode::Fixture {
@@ -137,6 +133,7 @@ fn with_options(mut test: TestTree, f: impl FnOnce(&mut Options)) -> TestTree {
             f(options);
             test
         }
+        _ => test,
     }
 }
 
@@ -171,8 +168,8 @@ pub fn should_panic(
 }
 
 /// Runs raclette with a default config but reads the command line arguments
-/// and overrides settings from the default config. If this behavior is undesired
-/// refer to [default_main_no_config_override] instead.
+/// and overrides settings from the default config. If this behavior is
+/// undesired refer to [default_main_no_config_override] instead.
 ///
 /// Returns a list of [execution::TaskResult] for each test that was ran.
 pub fn default_main(default_config: Config, tree: TestTree) -> Vec<execution::CompletedTask> {
@@ -203,7 +200,8 @@ pub fn default_main(default_config: Config, tree: TestTree) -> Vec<execution::Co
     default_main_no_config_override(config, tree)
 }
 
-/// Runs raclette with a fixed configuration. Does not inspect command line options.
+/// Runs raclette with a fixed configuration. Does not inspect command line
+/// options.
 pub fn default_main_no_config_override(
     config: Config,
     tree: TestTree,
