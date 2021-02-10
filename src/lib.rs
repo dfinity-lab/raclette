@@ -35,17 +35,70 @@ impl Options {
     }
 }
 
+type FixtureAssertion<R> = Box<dyn FnOnce(&R) -> GenericAssertion>;
+type FixtureSetup<R> = Box<dyn FnOnce() -> Result<Box<R>, String> + 'static>;
+type FixtureTeardown<R> = Box<dyn FnOnce(R) + 'static>;
+
+pub fn fixture_assertion_erase<R: 'static>(
+    f: FixtureAssertion<R>,
+) -> FixtureAssertion<Box<dyn Any>> {
+    Box::new(|any| f(any.downcast_ref().unwrap()))
+}
+
+pub fn fixture_setup_erase<R: 'static>(f: FixtureSetup<R>) -> FixtureSetup<dyn Any> {
+    Box::new(|| {
+        f().map(|r| {
+            let any_r: dyn Any = todo!();
+            Box::new(/* why doesn't any_r work here? */ todo!())
+        })
+    })
+}
+
+pub struct FixtureTest<R> {
+    name: String,
+    assertion: FixtureAssertion<R>,
+    options: Options,
+}
+
+pub fn fixture_test_erase<R: Sized + 'static>(t: FixtureTest<R>) -> FixtureTest<Box<dyn Any>> {
+    FixtureTest {
+        name: t.name,
+        assertion: fixture_assertion_erase(t.assertion),
+        options: t.options,
+    }
+}
+
 enum TreeNode {
     Leaf {
         name: String,
         assertion: GenericAssertion,
         options: Options,
     },
+    Fixture {
+        name: String,
+        setup: FixtureSetup<dyn Any>,
+        teardown: FixtureTeardown<dyn Any>,
+        assertions: Vec<FixtureTest<Box<dyn Any>>>,
+    },
     Fork {
         name: String,
         tests: Vec<TestTree>,
         options: Options,
     },
+}
+
+fn fixture<N: ToString, R: 'static>(
+    name: N,
+    setup: FixtureSetup<R>,
+    teardown: FixtureTeardown<R>,
+    steps: impl Iterator<Item = FixtureTest<R>>,
+) -> TestTree {
+    TestTree(TreeNode::Fixture {
+        name: name.to_string(),
+        setup: todo!(),
+        teardown: todo!(),
+        assertions: steps.map(fixture_test_erase).collect(),
+    })
 }
 
 fn try_get_panic_msg<'a>(obj: &'a Box<dyn Any + Send + 'static>) -> Option<&'a str> {
