@@ -5,10 +5,11 @@ use mio_signals as msig;
 use nix::sys::signal::{killpg, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{self, fork, ForkResult, Pid};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
 use std::os::unix::io::AsRawFd;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -64,8 +65,10 @@ struct RunningTask {
     started_at: Instant,
     stdout_pipe: pipe::Receiver,
     stderr_pipe: pipe::Receiver,
+    report_pipe: pipe::Receiver,
     stdout_buf: Vec<u8>,
     stderr_buf: Vec<u8>,
+    report_buf: Vec<u8>,
 }
 
 /// A task that is being observed by the test driver.
@@ -85,6 +88,10 @@ struct ObservedTask {
     // enabled.
     stdout_offset: usize,
     stderr_offset: usize,
+    // Similarly to stdout/stderr; tasks have a dedicate pipe to send
+    report_pipe: Option<pipe::Receiver>,
+    report_buf: Vec<u8>,
+    report_offset: usize,
 }
 
 /// A task that finished executing and is ready to be reported.
@@ -116,6 +123,97 @@ pub trait Report {
     fn start(&mut self, task_name: String);
     fn report(&mut self, result: &CompletedTask);
     fn done(&mut self);
+
+    fn stage(&mut self, full_name: &Vec<String>, stage_rep: StageReport) {
+        let mut full_name = full_name.clone();
+        match stage_rep {
+            StageReport::Start { stage_name } => {
+                full_name.push(stage_name);
+                self.start(full_name.join("::"));
+            }
+            StageReport::Stop {
+                stage_name,
+                status,
+                duration,
+            } => {
+                full_name.push(stage_name);
+                let completed_task = CompletedTask {
+                    full_name,
+                    duration,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    status: Status::from(status),
+                };
+                self.report(&completed_task);
+            }
+        }
+    }
+}
+
+pub struct StageReportSender {
+    sender: pipe::Sender,
+    // Keeping the stages that have been "started" around makes it easy
+    // to add a duration later on.
+    started_stages: BTreeMap<String, SystemTime>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum StageStatus {
+    Success,
+    Failure(i32),
+    Skipped(String),
+}
+
+impl From<StageStatus> for Status {
+    fn from(s: StageStatus) -> Self {
+        match s {
+            StageStatus::Success => Status::Success,
+            StageStatus::Failure(code) => Status::Failure(code),
+            StageStatus::Skipped(reason) => Status::Skipped(reason),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum StageReport {
+    Start {
+        stage_name: String,
+    },
+    Stop {
+        stage_name: String,
+        status: StageStatus,
+        duration: Duration,
+    },
+}
+
+impl StageReportSender {
+    pub fn report_stage_start<N: ToString>(&mut self, stage_name: N) {
+        let stage_name = stage_name.to_string();
+        self.started_stages
+            .insert(stage_name.clone(), std::time::SystemTime::now());
+        self.sender
+            .write(&bincode::serialize(&StageReport::Start { stage_name }).unwrap())
+            .expect("Couldn't send");
+    }
+
+    pub fn report_stage_end<N: ToString>(&mut self, stage_name: N, status: StageStatus) {
+        let stage_name = stage_name.to_string();
+        let end = std::time::SystemTime::now();
+        let start = self
+            .started_stages
+            .remove(&stage_name)
+            .unwrap_or(end.clone());
+        self.sender
+            .write(
+                &bincode::serialize(&StageReport::Stop {
+                    stage_name,
+                    status,
+                    duration: end.duration_since(start).unwrap_or(Duration::from_secs(0)),
+                })
+                .unwrap(),
+            )
+            .expect("Couldn't send");
+    }
 }
 
 pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
@@ -185,9 +283,11 @@ pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
 fn launch(task: Task) -> RunningTask {
     let (stdout_sender, stdout_receiver) = pipe::new().unwrap();
     let (stderr_sender, stderr_receiver) = pipe::new().unwrap();
+    let (report_sender, report_receiver) = pipe::new().unwrap();
 
     stdout_receiver.set_nonblocking(true).unwrap();
     stderr_receiver.set_nonblocking(true).unwrap();
+    report_receiver.set_nonblocking(true).unwrap();
 
     let full_name = task.full_name;
 
@@ -201,6 +301,7 @@ fn launch(task: Task) -> RunningTask {
 
             std::mem::drop(stdout_receiver);
             std::mem::drop(stderr_receiver);
+            std::mem::drop(report_receiver);
 
             let stdout_fd = std::io::stdout().as_raw_fd();
             let stderr_fd = std::io::stderr().as_raw_fd();
@@ -211,7 +312,11 @@ fn launch(task: Task) -> RunningTask {
             unistd::close(stderr_fd).expect("child: failed to close stderr");
             unistd::dup2(stderr_sender.as_raw_fd(), stderr_fd).unwrap();
 
-            (task.work)();
+            let mut stage_reporter = StageReportSender {
+                sender: report_sender,
+                started_stages: BTreeMap::new(),
+            };
+            (task.work)(&mut stage_reporter);
             std::process::exit(0)
         }
         ForkResult::Parent { child, .. } => {
@@ -237,8 +342,10 @@ fn launch(task: Task) -> RunningTask {
         started_at: Instant::now(),
         stdout_pipe: stdout_receiver,
         stderr_pipe: stderr_receiver,
+        report_pipe: report_receiver,
         stdout_buf: Vec::new(),
         stderr_buf: Vec::new(),
+        report_buf: Vec::new(),
     }
 }
 
@@ -268,8 +375,10 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
         started_at,
         mut stdout_pipe,
         mut stderr_pipe,
+        mut report_pipe,
         stdout_buf,
         stderr_buf,
+        report_buf,
     } = task;
 
     poll.registry()
@@ -286,6 +395,13 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
             Interest::READABLE,
         )
         .unwrap();
+    poll.registry()
+        .register(
+            &mut report_pipe,
+            make_token(pid, InputSource::Report),
+            Interest::READABLE,
+        )
+        .unwrap();
 
     ObservedTask {
         full_name,
@@ -293,11 +409,14 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
         started_at,
         stdout_pipe: Some(stdout_pipe),
         stderr_pipe: Some(stderr_pipe),
+        report_pipe: Some(report_pipe),
         status_and_duration: None,
         stdout_buf,
         stderr_buf,
+        report_buf,
         stdout_offset: 0,
         stderr_offset: 0,
+        report_offset: 0,
     }
 }
 
@@ -465,7 +584,24 @@ pub fn execute(
                         observed_task.stderr_pipe = None;
                     }
                 }
-                InputSource::Report => unimplemented!(),
+                InputSource::Report => {
+                    if event.is_readable() {
+                        if let Some(ref mut pipe) = observed_task.report_pipe {
+                            let n = pipe.read(&mut buf).expect("failed to read REPORT");
+                            observed_task.report_buf.extend_from_slice(&buf[0..n]);
+                            let stage_rep: StageReport = bincode::deserialize(
+                                &observed_task.report_buf
+                                    [observed_task.report_offset..observed_task.report_offset + n],
+                            )
+                            .unwrap();
+                            observed_task.report_offset = observed_task.report_offset + n;
+                            report.stage(&observed_task.full_name, stage_rep);
+                        }
+                    }
+                    if event.is_read_closed() {
+                        observed_task.report_pipe = None;
+                    }
+                }
             }
         }
 

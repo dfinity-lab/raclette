@@ -4,12 +4,15 @@ mod report;
 
 pub use config::Config;
 pub use execution::CompletedTask;
+pub use execution::StageReport;
+pub use execution::StageReportSender;
+pub use execution::StageStatus;
 pub use execution::Status;
 
 use std::any::Any;
 use std::string::ToString;
 
-type GenericAssertion = Box<dyn FnOnce() + 'static>;
+type GenericAssertion = Box<dyn FnOnce(&mut StageReportSender) + 'static>;
 
 pub struct TestTree(TreeNode);
 
@@ -55,6 +58,13 @@ fn try_get_panic_msg<'a>(obj: &'a Box<dyn Any + Send + 'static>) -> Option<&'a s
 }
 
 pub fn test_case<N: ToString, A: FnOnce() + 'static>(name: N, assertion: A) -> TestTree {
+    test_case_reporter(name, |_| assertion())
+}
+
+pub fn test_case_reporter<N: ToString, A: FnOnce(&mut StageReportSender) + 'static>(
+    name: N,
+    assertion: A,
+) -> TestTree {
     TestTree(TreeNode::Leaf {
         name: name.to_string(),
         assertion: Box::new(assertion),

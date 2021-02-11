@@ -25,6 +25,13 @@ fn loop_infinitely() {
     }
 }
 
+fn test_my_reporter(rep: &mut StageReportSender) {
+    rep.report_stage_start("first");
+    println!("Sleeping one second");
+    std::thread::sleep(Duration::from_millis(1234));
+    rep.report_stage_end("first", StageStatus::Success);
+}
+
 fn tests() -> TestTree {
     test_suite(
         "all",
@@ -52,6 +59,7 @@ fn tests() -> TestTree {
                 "two infinite loops are enough",
                 test_case("infinite loop 3", loop_infinitely),
             ),
+            test_case_reporter("with a reporter", test_my_reporter),
         ],
     )
 }
