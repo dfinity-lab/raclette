@@ -37,9 +37,11 @@ impl Status {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
 enum InputSource {
     Stdout,
     Stderr,
+    Report,
 }
 
 /// A task to be executed as a test.
@@ -242,18 +244,21 @@ fn launch(task: Task) -> RunningTask {
 
 fn make_token(pid: Pid, source: InputSource) -> Token {
     match source {
-        InputSource::Stdout => Token((pid.as_raw() as usize) << 1),
-        InputSource::Stderr => Token((pid.as_raw() as usize) << 1 | 1),
+        InputSource::Stdout => Token((pid.as_raw() as usize) << 2),
+        InputSource::Stderr => Token((pid.as_raw() as usize) << 2 | 1),
+        InputSource::Report => Token((pid.as_raw() as usize) << 2 | 2),
     }
 }
 
 fn split_token(token: Token) -> (Pid, InputSource) {
-    let src = if token.0 & 1 == 0 {
-        InputSource::Stdout
-    } else {
+    let src = if token.0 & 2 == 2 {
+        InputSource::Report
+    } else if token.0 & 1 == 1 {
         InputSource::Stderr
+    } else {
+        InputSource::Stdout
     };
-    (Pid::from_raw((token.0 >> 1) as i32), src)
+    (Pid::from_raw((token.0 >> 2) as i32), src)
 }
 
 fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
@@ -460,6 +465,7 @@ pub fn execute(
                         observed_task.stderr_pipe = None;
                     }
                 }
+                InputSource::Report => unimplemented!(),
             }
         }
 
@@ -520,4 +526,23 @@ pub fn execute(
 
     report.done();
     task_results
+}
+
+mod test {
+    #[allow(unused_imports)]
+    use super::*;
+
+    #[test]
+    fn make_token_is_correct() {
+        for src in vec![
+            InputSource::Stdout,
+            InputSource::Stderr,
+            InputSource::Report,
+        ] {
+            assert_eq!(
+                split_token(make_token(Pid::this(), src.clone())),
+                (Pid::this(), src)
+            )
+        }
+    }
 }

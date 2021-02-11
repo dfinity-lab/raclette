@@ -56,16 +56,29 @@ fn tests() -> TestTree {
     )
 }
 
-fn main() {
-    let completed_tasks = default_main(Config::default(), tests());
+// The test suite above is engineered to have two timeouts and one
+// skipped test.
+const NUM_FAILURES: usize = 2;
+const NUM_IGNORED: usize = 1;
+
+#[test]
+fn raclette_sample_main() {
+    let completed_tasks = default_main(Config::default().format(config::Format::Json), tests());
     let failed_tasks: Vec<CompletedTask> = completed_tasks
         .into_iter()
         .filter(|task| !task.status.is_ok())
         .collect();
 
+    println!(
+        r#"This executable runs a raclette test suite which has been engineered
+to have {} failures and {} ignored test. If raclette detected these
+failures and ignored tests correctly this process returns 0"#,
+        NUM_FAILURES, NUM_IGNORED,
+    );
+
     // In this particular test-suite, we expect two infinite loops to be stopped by raclette,
     // in your case, you should probably ensure failed_tasks.len() == 0
-    if failed_tasks.len() != 2 {
+    if failed_tasks.len() != NUM_FAILURES {
         std::process::exit(1);
     }
 }

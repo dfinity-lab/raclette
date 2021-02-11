@@ -13,6 +13,3 @@ num_cpus = "1.0"
 pico-args = "0.3"
 term = "0.6"
 
-[[test]]
-name = "main"
-harness = false

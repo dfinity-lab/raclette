@@ -66,6 +66,7 @@ pub struct Config {
     pub(crate) nocapture: bool,
 }
 
+#[derive(Debug)]
 pub enum ConfigParseError {
     HelpRequested,
     OptionError(String),
