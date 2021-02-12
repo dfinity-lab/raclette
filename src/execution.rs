@@ -220,8 +220,8 @@ impl StreamDecoder {
                 return None;
             }
 
-            let payload = &self.buf
-                [self.offset + size_of::<usize>()..self.offset + size_of::<usize>() + payload_size];
+            let payload_offset = self.offset + size_of::<usize>();
+            let payload = &self.buf[payload_offset .. payload_offset + payload_size];
             let res: StageReport =
                 bincode::deserialize(&payload).unwrap_or_else(|e| panic!(format!("{:?}", e)));
             // Update the offset
