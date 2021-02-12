@@ -58,7 +58,7 @@ fn try_get_panic_msg<'a>(obj: &'a Box<dyn Any + Send + 'static>) -> Option<&'a s
 }
 
 pub fn test_case<N: ToString, A: FnOnce() + 'static>(name: N, assertion: A) -> TestTree {
-    test_case_reporter(name, |_| assertion())
+    test_case_ctx(name, |_| assertion())
 }
 
 pub fn test_case_ctx<N: ToString, A: FnOnce(&mut TestContext) + 'static>(
