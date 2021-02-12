@@ -61,7 +61,7 @@ pub fn test_case<N: ToString, A: FnOnce() + 'static>(name: N, assertion: A) -> T
     test_case_reporter(name, |_| assertion())
 }
 
-pub fn test_case_reporter<N: ToString, A: FnOnce(&mut TestContext) + 'static>(
+pub fn test_case_ctx<N: ToString, A: FnOnce(&mut TestContext) + 'static>(
     name: N,
     assertion: A,
 ) -> TestTree {

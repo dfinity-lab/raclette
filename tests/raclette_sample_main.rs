@@ -58,7 +58,7 @@ fn tests() -> TestTree {
                 "two infinite loops are enough",
                 test_case("infinite loop 3", loop_infinitely),
             ),
-            test_case_reporter("with a reporter", test_my_reporter),
+            test_case_ctx("with a reporter", test_my_reporter),
         ],
     )
 }
