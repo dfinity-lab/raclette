@@ -6,10 +6,11 @@ use nix::sys::signal::{killpg, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{self, fork, ForkResult, Pid};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
+use std::mem::size_of;
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant, SystemTime};
+use std::{collections::HashMap, convert::TryInto};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -68,7 +69,6 @@ struct RunningTask {
     report_pipe: pipe::Receiver,
     stdout_buf: Vec<u8>,
     stderr_buf: Vec<u8>,
-    report_buf: Vec<u8>,
 }
 
 /// A task that is being observed by the test driver.
@@ -90,8 +90,7 @@ struct ObservedTask {
     stderr_offset: usize,
     // Similarly to stdout/stderr; tasks have a dedicate pipe to send
     report_pipe: Option<pipe::Receiver>,
-    report_buf: Vec<u8>,
-    report_offset: usize,
+    report_decoder: StreamDecoder,
 }
 
 /// A task that finished executing and is ready to be reported.
@@ -124,37 +123,25 @@ pub trait Report {
     fn report(&mut self, result: &CompletedTask);
     fn done(&mut self);
 
-    fn stage(&mut self, full_name: &Vec<String>, stage_rep: StageReport) {
-        let mut full_name = full_name.clone();
-        match stage_rep {
-            StageReport::Start { stage_name } => {
-                full_name.push(stage_name);
-                self.start(full_name.join("::"));
-            }
-            StageReport::Stop {
-                stage_name,
-                status,
-                duration,
-            } => {
-                full_name.push(stage_name);
-                let completed_task = CompletedTask {
-                    full_name,
-                    duration,
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    status: Status::from(status),
-                };
-                self.report(&completed_task);
-            }
-        }
+    fn stage(&mut self, full_name: &[String], stage_rep: StageReport) {
+        let mut full_name: Vec<String> = Vec::from(full_name);
+        full_name.push(stage_rep.stage_name);
+        let completed_task = CompletedTask {
+            full_name,
+            duration: stage_rep.duration,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            status: Status::from(stage_rep.status),
+        };
+        self.report(&completed_task);
     }
 }
 
 pub struct StageReportSender {
     sender: pipe::Sender,
-    // Keeping the stages that have been "started" around makes it easy
-    // to add a duration later on.
-    started_stages: BTreeMap<String, SystemTime>,
+    // Since we define the stages to be linear, we just need to
+    // keep one timestamp to report a stage's duration.
+    started_at: SystemTime,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -174,45 +161,75 @@ impl From<StageStatus> for Status {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum StageReport {
-    Start {
-        stage_name: String,
-    },
-    Stop {
-        stage_name: String,
-        status: StageStatus,
-        duration: Duration,
-    },
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+pub struct StageReport {
+    stage_name: String,
+    status: StageStatus,
+    duration: Duration,
 }
 
 impl StageReportSender {
-    pub fn report_stage_start<N: ToString>(&mut self, stage_name: N) {
-        let stage_name = stage_name.to_string();
-        self.started_stages
-            .insert(stage_name.clone(), std::time::SystemTime::now());
-        self.sender
-            .write(&bincode::serialize(&StageReport::Start { stage_name }).unwrap())
-            .expect("Couldn't send");
-    }
-
-    pub fn report_stage_end<N: ToString>(&mut self, stage_name: N, status: StageStatus) {
+    pub fn report_stage_status<N: ToString>(&mut self, stage_name: N, status: StageStatus) {
         let stage_name = stage_name.to_string();
         let end = std::time::SystemTime::now();
-        let start = self
-            .started_stages
-            .remove(&stage_name)
-            .unwrap_or(end.clone());
-        self.sender
-            .write(
-                &bincode::serialize(&StageReport::Stop {
-                    stage_name,
-                    status,
-                    duration: end.duration_since(start).unwrap_or(Duration::from_secs(0)),
-                })
-                .unwrap(),
-            )
-            .expect("Couldn't send");
+        let start = self.started_at;
+        self.started_at = end.clone();
+
+        let payload = StageReport {
+            stage_name,
+            status,
+            duration: end.duration_since(start).unwrap_or(Duration::from_secs(0)),
+        };
+
+        serialize_and_write(&mut self.sender, &payload).expect("Couldn't send");
+    }
+}
+
+fn serialize_and_write<W: Write, A: Serialize>(w: &mut W, payload: &A) -> io::Result<usize> {
+    let payload = bincode::serialize(payload).unwrap();
+    let n = w.write(&(payload.len() as usize).to_be_bytes())?;
+    let m = w.write(&payload)?;
+    Ok(n + m)
+}
+
+struct StreamDecoder {
+    buf: Vec<u8>,
+    offset: usize,
+}
+
+impl StreamDecoder {
+    fn new() -> Self {
+        StreamDecoder {
+            buf: Vec::new(),
+            offset: 0,
+        }
+    }
+
+    fn append(&mut self, data: &[u8]) {
+        self.buf.extend_from_slice(data);
+    }
+    // Decode a message if there is enough data in the buffer.
+    fn try_decode(&mut self) -> Option<StageReport> {
+        let avail = self.buf.len() - self.offset;
+
+        if avail > size_of::<usize>() {
+            let payload_size = &self.buf[self.offset..self.offset + size_of::<usize>()];
+            let payload_size = usize::from_be_bytes(payload_size.try_into().unwrap());
+
+            if avail < size_of::<usize>() + payload_size {
+                return None;
+            }
+
+            let payload = &self.buf
+                [self.offset + size_of::<usize>()..self.offset + size_of::<usize>() + payload_size];
+            let res: StageReport =
+                bincode::deserialize(&payload).unwrap_or_else(|e| panic!(format!("{:?}", e)));
+            // Update the offset
+            self.offset = self.offset + size_of::<usize>() + payload_size;
+            Some(res)
+        } else {
+            None
+        }
     }
 }
 
@@ -314,7 +331,7 @@ fn launch(task: Task) -> RunningTask {
 
             let mut stage_reporter = StageReportSender {
                 sender: report_sender,
-                started_stages: BTreeMap::new(),
+                started_at: SystemTime::now(),
             };
             (task.work)(&mut stage_reporter);
             std::process::exit(0)
@@ -345,7 +362,6 @@ fn launch(task: Task) -> RunningTask {
         report_pipe: report_receiver,
         stdout_buf: Vec::new(),
         stderr_buf: Vec::new(),
-        report_buf: Vec::new(),
     }
 }
 
@@ -378,7 +394,6 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
         mut report_pipe,
         stdout_buf,
         stderr_buf,
-        report_buf,
     } = task;
 
     poll.registry()
@@ -413,10 +428,9 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
         status_and_duration: None,
         stdout_buf,
         stderr_buf,
-        report_buf,
         stdout_offset: 0,
         stderr_offset: 0,
-        report_offset: 0,
+        report_decoder: StreamDecoder::new(),
     }
 }
 
@@ -588,14 +602,10 @@ pub fn execute(
                     if event.is_readable() {
                         if let Some(ref mut pipe) = observed_task.report_pipe {
                             let n = pipe.read(&mut buf).expect("failed to read REPORT");
-                            observed_task.report_buf.extend_from_slice(&buf[0..n]);
-                            let stage_rep: StageReport = bincode::deserialize(
-                                &observed_task.report_buf
-                                    [observed_task.report_offset..observed_task.report_offset + n],
-                            )
-                            .unwrap();
-                            observed_task.report_offset = observed_task.report_offset + n;
-                            report.stage(&observed_task.full_name, stage_rep);
+                            observed_task.report_decoder.append(&buf[0..n]);
+                            if let Some(stage_rep) = observed_task.report_decoder.try_decode() {
+                                report.stage(&observed_task.full_name, stage_rep);
+                            }
                         }
                     }
                     if event.is_read_closed() {
@@ -680,5 +690,36 @@ mod test {
                 (Pid::this(), src)
             )
         }
+    }
+
+    #[test]
+    fn stream_decoder_is_correct() {
+        let s1 = StageReport {
+            stage_name: "s1".to_string(),
+            status: StageStatus::Success,
+            duration: Duration::from_millis(111),
+        };
+        let s2 = StageReport {
+            stage_name: "s2".to_string(),
+            status: StageStatus::Success,
+            duration: Duration::from_millis(222),
+        };
+        let s3 = StageReport {
+            stage_name: "s3".to_string(),
+            status: StageStatus::Failure(42),
+            duration: Duration::from_millis(333),
+        };
+
+        let mut dec = StreamDecoder::new();
+        let mut buf = Vec::new();
+        for s in vec![&s1, &s2, &s3] {
+            serialize_and_write(&mut buf, s).unwrap();
+        }
+
+        dec.append(&buf);
+        assert_eq!(dec.try_decode(), Some(s1));
+        assert_eq!(dec.try_decode(), Some(s2));
+        assert_eq!(dec.try_decode(), Some(s3));
+        assert_eq!(dec.try_decode(), None);
     }
 }
