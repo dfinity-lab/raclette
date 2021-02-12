@@ -225,7 +225,7 @@ impl StreamDecoder {
             let res: StageReport =
                 bincode::deserialize(&payload).expect("failed to deserialize a bincode message");
             // Update the offset
-            self.offset = self.offset + size_of::<usize>() + payload_size;
+            self.offset = payload_offset + payload_size;
             Some(res)
         } else {
             None
