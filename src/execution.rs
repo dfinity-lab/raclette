@@ -173,7 +173,7 @@ impl StageReportSender {
         let stage_name = stage_name.to_string();
         let end = std::time::SystemTime::now();
         let start = self.started_at;
-        self.started_at = end.clone();
+        self.started_at = end;
 
         let payload = StageReport {
             stage_name,
