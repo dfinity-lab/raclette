@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::mem::size_of;
 use std::os::unix::io::AsRawFd;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, convert::TryInto};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -141,7 +141,7 @@ pub struct StageReportSender {
     sender: pipe::Sender,
     // Since we define the stages to be linear, we just need to
     // keep one timestamp to report a stage's duration.
-    started_at: SystemTime,
+    started_at: Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -171,14 +171,14 @@ pub struct StageReport {
 impl StageReportSender {
     pub fn report_stage_status<N: ToString>(&mut self, stage_name: N, status: StageStatus) {
         let stage_name = stage_name.to_string();
-        let end = std::time::SystemTime::now();
+        let end = Instant::now();
         let start = self.started_at;
         self.started_at = end;
 
         let payload = StageReport {
             stage_name,
             status,
-            duration: end.duration_since(start).unwrap_or(Duration::from_secs(0)),
+            duration: end.duration_since(start),
         };
 
         serialize_and_write(&mut self.sender, &payload).expect("Couldn't send");
@@ -221,7 +221,7 @@ impl StreamDecoder {
             }
 
             let payload_offset = self.offset + size_of::<usize>();
-            let payload = &self.buf[payload_offset .. payload_offset + payload_size];
+            let payload = &self.buf[payload_offset..payload_offset + payload_size];
             let res: StageReport =
                 bincode::deserialize(&payload).expect("failed to deserialize a bincode message");
             // Update the offset
@@ -331,7 +331,7 @@ fn launch(task: Task) -> RunningTask {
 
             let mut stage_reporter = StageReportSender {
                 sender: report_sender,
-                started_at: SystemTime::now(),
+                started_at: Instant::now(),
             };
             (task.work)(&mut stage_reporter);
             std::process::exit(0)
