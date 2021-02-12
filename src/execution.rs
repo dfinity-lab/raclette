@@ -137,7 +137,7 @@ pub trait Report {
     }
 }
 
-pub struct StageReportSender {
+pub struct TestContext {
     sender: pipe::Sender,
     // Since we define the stages to be linear, we just need to
     // keep one timestamp to report a stage's duration.
@@ -168,7 +168,7 @@ pub struct StageReport {
     duration: Duration,
 }
 
-impl StageReportSender {
+impl TestContext {
     pub fn report_stage_status<N: ToString>(&mut self, stage_name: N, status: StageStatus) {
         let stage_name = stage_name.to_string();
         let end = Instant::now();
@@ -330,7 +330,7 @@ fn launch(task: Task) -> RunningTask {
             unistd::close(stderr_fd).expect("child: failed to close stderr");
             unistd::dup2(stderr_sender.as_raw_fd(), stderr_fd).unwrap();
 
-            let mut stage_reporter = StageReportSender {
+            let mut stage_reporter = TestContext {
                 sender: report_sender,
                 started_at: Instant::now(),
             };

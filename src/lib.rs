@@ -5,14 +5,14 @@ mod report;
 pub use config::Config;
 pub use execution::CompletedTask;
 pub use execution::StageReport;
-pub use execution::StageReportSender;
 pub use execution::StageStatus;
 pub use execution::Status;
+pub use execution::TestContext;
 
 use std::any::Any;
 use std::string::ToString;
 
-type GenericAssertion = Box<dyn FnOnce(&mut StageReportSender) + 'static>;
+type GenericAssertion = Box<dyn FnOnce(&mut TestContext) + 'static>;
 
 pub struct TestTree(TreeNode);
 
@@ -61,7 +61,7 @@ pub fn test_case<N: ToString, A: FnOnce() + 'static>(name: N, assertion: A) -> T
     test_case_reporter(name, |_| assertion())
 }
 
-pub fn test_case_reporter<N: ToString, A: FnOnce(&mut StageReportSender) + 'static>(
+pub fn test_case_reporter<N: ToString, A: FnOnce(&mut TestContext) + 'static>(
     name: N,
     assertion: A,
 ) -> TestTree {
