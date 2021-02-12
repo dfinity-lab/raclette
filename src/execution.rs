@@ -603,7 +603,7 @@ pub fn execute(
                         if let Some(ref mut pipe) = observed_task.report_pipe {
                             let n = pipe.read(&mut buf).expect("failed to read REPORT");
                             observed_task.report_decoder.append(&buf[0..n]);
-                            if let Some(stage_rep) = observed_task.report_decoder.try_decode() {
+                            while let Some(stage_rep) = observed_task.report_decoder.try_decode() {
                                 report.stage(&observed_task.full_name, stage_rep);
                             }
                         }
