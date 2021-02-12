@@ -213,7 +213,7 @@ impl StreamDecoder {
     fn try_decode(&mut self) -> Option<StageReport> {
         let avail = self.buf.len() - self.offset;
 
-        if avail <= size_of::<usize>() {
+        if avail < size_of::<usize>() {
             return None;
         }
 
