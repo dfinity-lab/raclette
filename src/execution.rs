@@ -208,28 +208,29 @@ impl StreamDecoder {
     fn append(&mut self, data: &[u8]) {
         self.buf.extend_from_slice(data);
     }
+
     // Decode a message if there is enough data in the buffer.
     fn try_decode(&mut self) -> Option<StageReport> {
         let avail = self.buf.len() - self.offset;
 
-        if avail > size_of::<usize>() {
-            let payload_size = &self.buf[self.offset..self.offset + size_of::<usize>()];
-            let payload_size = usize::from_be_bytes(payload_size.try_into().unwrap());
-
-            if avail < size_of::<usize>() + payload_size {
-                return None;
-            }
-
-            let payload_offset = self.offset + size_of::<usize>();
-            let payload = &self.buf[payload_offset..payload_offset + payload_size];
-            let res: StageReport =
-                bincode::deserialize(&payload).expect("failed to deserialize a bincode message");
-            // Update the offset
-            self.offset = payload_offset + payload_size;
-            Some(res)
-        } else {
-            None
+        if avail <= size_of::<usize>() {
+            return None;
         }
+
+        let payload_size = &self.buf[self.offset..self.offset + size_of::<usize>()];
+        let payload_size = usize::from_be_bytes(payload_size.try_into().unwrap());
+
+        if avail < size_of::<usize>() + payload_size {
+            return None;
+        }
+
+        let payload_offset = self.offset + size_of::<usize>();
+        let payload = &self.buf[payload_offset..payload_offset + payload_size];
+        let res: StageReport =
+            bincode::deserialize(&payload).expect("failed to deserialize a bincode message");
+        // Update the offset
+        self.offset = payload_offset + payload_size;
+        Some(res)
     }
 }
 
