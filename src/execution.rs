@@ -5,10 +5,12 @@ use mio_signals as msig;
 use nix::sys::signal::{killpg, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{self, fork, ForkResult, Pid};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
+use std::mem::size_of;
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
+use std::{collections::HashMap, convert::TryInto};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -37,9 +39,11 @@ impl Status {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
 enum InputSource {
     Stdout,
     Stderr,
+    Report,
 }
 
 /// A task to be executed as a test.
@@ -62,6 +66,7 @@ struct RunningTask {
     started_at: Instant,
     stdout_pipe: pipe::Receiver,
     stderr_pipe: pipe::Receiver,
+    report_pipe: pipe::Receiver,
     stdout_buf: Vec<u8>,
     stderr_buf: Vec<u8>,
 }
@@ -83,6 +88,9 @@ struct ObservedTask {
     // enabled.
     stdout_offset: usize,
     stderr_offset: usize,
+    // Similarly to stdout/stderr; tasks have a dedicate pipe to send
+    report_pipe: Option<pipe::Receiver>,
+    report_decoder: StreamDecoder,
 }
 
 /// A task that finished executing and is ready to be reported.
@@ -114,6 +122,116 @@ pub trait Report {
     fn start(&mut self, task_name: String);
     fn report(&mut self, result: &CompletedTask);
     fn done(&mut self);
+
+    fn stage(&mut self, full_name: &[String], stage_rep: StageReport) {
+        let mut full_name: Vec<String> = Vec::from(full_name);
+        full_name.push(stage_rep.stage_name);
+        let completed_task = CompletedTask {
+            full_name,
+            duration: stage_rep.duration,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            status: Status::from(stage_rep.status),
+        };
+        self.report(&completed_task);
+    }
+}
+
+pub struct TestContext {
+    sender: pipe::Sender,
+    // Since we define the stages to be linear, we just need to
+    // keep one timestamp to report a stage's duration.
+    started_at: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum StageStatus {
+    Success,
+    Failure(i32),
+    Skipped(String),
+}
+
+impl From<StageStatus> for Status {
+    fn from(s: StageStatus) -> Self {
+        match s {
+            StageStatus::Success => Status::Success,
+            StageStatus::Failure(code) => Status::Failure(code),
+            StageStatus::Skipped(reason) => Status::Skipped(reason),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+pub struct StageReport {
+    stage_name: String,
+    status: StageStatus,
+    duration: Duration,
+}
+
+impl TestContext {
+    pub fn report_stage_status<N: ToString>(&mut self, stage_name: N, status: StageStatus) {
+        let stage_name = stage_name.to_string();
+        let end = Instant::now();
+        let start = self.started_at;
+        self.started_at = end;
+
+        let payload = StageReport {
+            stage_name,
+            status,
+            duration: end.duration_since(start),
+        };
+
+        serialize_and_write(&mut self.sender, &payload).expect("Couldn't send");
+    }
+}
+
+fn serialize_and_write<W: Write, A: Serialize>(w: &mut W, payload: &A) -> io::Result<usize> {
+    let payload = bincode::serialize(payload).unwrap();
+    let n = w.write(&(payload.len() as usize).to_be_bytes())?;
+    let m = w.write(&payload)?;
+    Ok(n + m)
+}
+
+struct StreamDecoder {
+    buf: Vec<u8>,
+    offset: usize,
+}
+
+impl StreamDecoder {
+    fn new() -> Self {
+        StreamDecoder {
+            buf: Vec::new(),
+            offset: 0,
+        }
+    }
+
+    fn append(&mut self, data: &[u8]) {
+        self.buf.extend_from_slice(data);
+    }
+
+    // Decode a message if there is enough data in the buffer.
+    fn try_decode(&mut self) -> Option<StageReport> {
+        let avail = self.buf.len() - self.offset;
+
+        if avail < size_of::<usize>() {
+            return None;
+        }
+
+        let payload_size = &self.buf[self.offset..self.offset + size_of::<usize>()];
+        let payload_size = usize::from_be_bytes(payload_size.try_into().unwrap());
+
+        if avail < size_of::<usize>() + payload_size {
+            return None;
+        }
+
+        let payload_offset = self.offset + size_of::<usize>();
+        let payload = &self.buf[payload_offset..payload_offset + payload_size];
+        let res: StageReport =
+            bincode::deserialize(&payload).expect("failed to deserialize a bincode message");
+        // Update the offset
+        self.offset = payload_offset + payload_size;
+        Some(res)
+    }
 }
 
 pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
@@ -183,9 +301,11 @@ pub fn make_plan(config: &Config, t: TestTree) -> Vec<Task> {
 fn launch(task: Task) -> RunningTask {
     let (stdout_sender, stdout_receiver) = pipe::new().unwrap();
     let (stderr_sender, stderr_receiver) = pipe::new().unwrap();
+    let (report_sender, report_receiver) = pipe::new().unwrap();
 
     stdout_receiver.set_nonblocking(true).unwrap();
     stderr_receiver.set_nonblocking(true).unwrap();
+    report_receiver.set_nonblocking(true).unwrap();
 
     let full_name = task.full_name;
 
@@ -199,6 +319,7 @@ fn launch(task: Task) -> RunningTask {
 
             std::mem::drop(stdout_receiver);
             std::mem::drop(stderr_receiver);
+            std::mem::drop(report_receiver);
 
             let stdout_fd = std::io::stdout().as_raw_fd();
             let stderr_fd = std::io::stderr().as_raw_fd();
@@ -209,7 +330,11 @@ fn launch(task: Task) -> RunningTask {
             unistd::close(stderr_fd).expect("child: failed to close stderr");
             unistd::dup2(stderr_sender.as_raw_fd(), stderr_fd).unwrap();
 
-            (task.work)();
+            let mut stage_reporter = TestContext {
+                sender: report_sender,
+                started_at: Instant::now(),
+            };
+            (task.work)(&mut stage_reporter);
             std::process::exit(0)
         }
         ForkResult::Parent { child, .. } => {
@@ -235,6 +360,7 @@ fn launch(task: Task) -> RunningTask {
         started_at: Instant::now(),
         stdout_pipe: stdout_receiver,
         stderr_pipe: stderr_receiver,
+        report_pipe: report_receiver,
         stdout_buf: Vec::new(),
         stderr_buf: Vec::new(),
     }
@@ -242,18 +368,21 @@ fn launch(task: Task) -> RunningTask {
 
 fn make_token(pid: Pid, source: InputSource) -> Token {
     match source {
-        InputSource::Stdout => Token((pid.as_raw() as usize) << 1),
-        InputSource::Stderr => Token((pid.as_raw() as usize) << 1 | 1),
+        InputSource::Stdout => Token((pid.as_raw() as usize) << 2),
+        InputSource::Stderr => Token((pid.as_raw() as usize) << 2 | 1),
+        InputSource::Report => Token((pid.as_raw() as usize) << 2 | 2),
     }
 }
 
 fn split_token(token: Token) -> (Pid, InputSource) {
-    let src = if token.0 & 1 == 0 {
-        InputSource::Stdout
-    } else {
+    let src = if token.0 & 2 == 2 {
+        InputSource::Report
+    } else if token.0 & 1 == 1 {
         InputSource::Stderr
+    } else {
+        InputSource::Stdout
     };
-    (Pid::from_raw((token.0 >> 1) as i32), src)
+    (Pid::from_raw((token.0 >> 2) as i32), src)
 }
 
 fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
@@ -263,6 +392,7 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
         started_at,
         mut stdout_pipe,
         mut stderr_pipe,
+        mut report_pipe,
         stdout_buf,
         stderr_buf,
     } = task;
@@ -281,6 +411,13 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
             Interest::READABLE,
         )
         .unwrap();
+    poll.registry()
+        .register(
+            &mut report_pipe,
+            make_token(pid, InputSource::Report),
+            Interest::READABLE,
+        )
+        .unwrap();
 
     ObservedTask {
         full_name,
@@ -288,11 +425,13 @@ fn observe(task: RunningTask, poll: &mut Poll) -> ObservedTask {
         started_at,
         stdout_pipe: Some(stdout_pipe),
         stderr_pipe: Some(stderr_pipe),
+        report_pipe: Some(report_pipe),
         status_and_duration: None,
         stdout_buf,
         stderr_buf,
         stdout_offset: 0,
         stderr_offset: 0,
+        report_decoder: StreamDecoder::new(),
     }
 }
 
@@ -460,6 +599,20 @@ pub fn execute(
                         observed_task.stderr_pipe = None;
                     }
                 }
+                InputSource::Report => {
+                    if event.is_readable() {
+                        if let Some(ref mut pipe) = observed_task.report_pipe {
+                            let n = pipe.read(&mut buf).expect("failed to read REPORT");
+                            observed_task.report_decoder.append(&buf[0..n]);
+                            while let Some(stage_rep) = observed_task.report_decoder.try_decode() {
+                                report.stage(&observed_task.full_name, stage_rep);
+                            }
+                        }
+                    }
+                    if event.is_read_closed() {
+                        observed_task.report_pipe = None;
+                    }
+                }
             }
         }
 
@@ -520,4 +673,54 @@ pub fn execute(
 
     report.done();
     task_results
+}
+
+mod test {
+    #[allow(unused_imports)]
+    use super::*;
+
+    #[test]
+    fn make_token_is_correct() {
+        for src in vec![
+            InputSource::Stdout,
+            InputSource::Stderr,
+            InputSource::Report,
+        ] {
+            assert_eq!(
+                split_token(make_token(Pid::this(), src.clone())),
+                (Pid::this(), src)
+            )
+        }
+    }
+
+    #[test]
+    fn stream_decoder_is_correct() {
+        let s1 = StageReport {
+            stage_name: "s1".to_string(),
+            status: StageStatus::Success,
+            duration: Duration::from_millis(111),
+        };
+        let s2 = StageReport {
+            stage_name: "s2".to_string(),
+            status: StageStatus::Success,
+            duration: Duration::from_millis(222),
+        };
+        let s3 = StageReport {
+            stage_name: "s3".to_string(),
+            status: StageStatus::Failure(42),
+            duration: Duration::from_millis(333),
+        };
+
+        let mut dec = StreamDecoder::new();
+        let mut buf = Vec::new();
+        for s in vec![&s1, &s2, &s3] {
+            serialize_and_write(&mut buf, s).unwrap();
+        }
+
+        dec.append(&buf);
+        assert_eq!(dec.try_decode(), Some(s1));
+        assert_eq!(dec.try_decode(), Some(s2));
+        assert_eq!(dec.try_decode(), Some(s3));
+        assert_eq!(dec.try_decode(), None);
+    }
 }
