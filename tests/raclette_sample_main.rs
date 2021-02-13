@@ -25,7 +25,7 @@ fn loop_infinitely() {
     }
 }
 
-fn test_my_reporter(rep: &mut TestContext) {
+fn test_my_reporter(mut rep: TestContext) {
     println!("Sleeping one second");
     std::thread::sleep(Duration::from_millis(1234));
     rep.report_stage_status("first", StageStatus::Success);

@@ -12,7 +12,7 @@ pub use execution::TestContext;
 use std::any::Any;
 use std::string::ToString;
 
-type GenericAssertion = Box<dyn FnOnce(&mut TestContext) + 'static>;
+type GenericAssertion = Box<dyn FnOnce(TestContext) + 'static>;
 
 pub struct TestTree(TreeNode);
 
@@ -61,7 +61,7 @@ pub fn test_case<N: ToString, A: FnOnce() + 'static>(name: N, assertion: A) -> T
     test_case_ctx(name, |_| assertion())
 }
 
-pub fn test_case_ctx<N: ToString, A: FnOnce(&mut TestContext) + 'static>(
+pub fn test_case_ctx<N: ToString, A: FnOnce(TestContext) + 'static>(
     name: N,
     assertion: A,
 ) -> TestTree {
