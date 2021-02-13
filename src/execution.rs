@@ -330,11 +330,11 @@ fn launch(task: Task) -> RunningTask {
             unistd::close(stderr_fd).expect("child: failed to close stderr");
             unistd::dup2(stderr_sender.as_raw_fd(), stderr_fd).unwrap();
 
-            let mut stage_reporter = TestContext {
+            let stage_reporter = TestContext {
                 sender: report_sender,
                 started_at: Instant::now(),
             };
-            (task.work)(&mut stage_reporter);
+            (task.work)(stage_reporter);
             std::process::exit(0)
         }
         ForkResult::Parent { child, .. } => {
