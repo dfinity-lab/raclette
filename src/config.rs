@@ -38,6 +38,9 @@ pub enum Format {
     Json,
     /// Use the format specified on http://testanything.org.
     Tap,
+    /// Use a compact format that ommits most of the results but
+    /// prints a summary at the end. Mostly useful with --nocapture
+    Compact,
 }
 
 impl Default for Format {
@@ -125,6 +128,7 @@ fn parse_format(input: &str) -> Result<Format, String> {
         "libtest" => Ok(Format::LibTest),
         "json" => Ok(Format::Json),
         "tap" => Ok(Format::Tap),
+        "compact" => Ok(Format::Compact),
         _ => Err(format!("unsupported FMT value: {}", input)),
     }
 }
