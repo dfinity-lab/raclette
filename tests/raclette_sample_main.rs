@@ -70,7 +70,7 @@ const NUM_IGNORED: usize = 1;
 
 #[test]
 fn raclette_sample_main() {
-    let completed_tasks = default_main(Config::default().format(config::Format::Json), tests());
+    let completed_tasks = default_main(Config::default().format(config::Format::Compact), tests());
     let failed_tasks: Vec<CompletedTask> = completed_tasks
         .into_iter()
         .filter(|task| !task.status.is_ok())

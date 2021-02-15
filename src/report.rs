@@ -2,10 +2,10 @@ use crate::{
     config::When,
     execution::{CompletedTask, Report, Status, Task},
 };
-use std::borrow::Cow;
 use std::io::{self, Write};
 use std::time::Duration;
-use term::color::{Color, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW};
+use std::{borrow::Cow, collections::BTreeMap};
+use term::color::{Color, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, GREEN, RED, YELLOW};
 
 #[derive(Default)]
 pub struct TestStats {
@@ -188,6 +188,78 @@ impl Report for TapReport {
     }
 
     fn done(&mut self) {}
+}
+
+/// This is a particularly simpl reporter, mostly useful with --nocapture,
+/// that will collect stats and results and will display a summary
+/// after all tests are done.
+pub struct CompactReport {
+    writer: ColorWriter,
+    results: BTreeMap<String, (Duration, Status)>,
+    stats: TestStats,
+}
+
+impl CompactReport {
+    pub fn new(writer: ColorWriter) -> Self {
+        Self {
+            writer,
+            results: BTreeMap::new(),
+            stats: Default::default(),
+        }
+    }
+}
+
+impl Report for CompactReport {
+    fn init(&mut self, _plan: &[Task]) {}
+
+    fn start(&mut self, _task_name: String) {}
+
+    fn report(&mut self, result: &CompletedTask) {
+        self.stats.update(result);
+        self.results.insert(
+            result.full_name.join("::"),
+            (result.duration, result.status.clone()),
+        );
+    }
+
+    fn done(&mut self) {
+        for (name, (dur, res)) in self.results.iter() {
+            let (lbl, color) = match res {
+                Status::Success => ("pass", GREEN),
+                Status::Failure(_) => ("fail", RED),
+                Status::Signaled(_) => ("sign", YELLOW),
+                Status::Timeout => ("tout", RED),
+                Status::Skipped(_) => ("skip", YELLOW),
+            };
+
+            self.writer.with_color(color, |out| {
+                write!(out, "{} ", lbl).unwrap();
+            });
+
+            write!(self.writer, "{} ", name).unwrap();
+
+            self.writer.with_color(term::color::BRIGHT_BLACK, |out| {
+                writeln!(out, "(in {:?})", dur).unwrap();
+            });
+        }
+
+        let (lbl, color) = if self.stats.ok() {
+            ("PASS", BRIGHT_GREEN)
+        } else {
+            ("FAIL", BRIGHT_RED)
+        };
+
+        write!(self.writer, "\nSummary: ").unwrap();
+        self.writer
+            .with_color(color, |out| write!(out, "{} ", lbl).unwrap());
+
+        writeln!(
+            self.writer,
+            "({} failed, {} skipped and {} passed)\n",
+            self.stats.failed, self.stats.ignored, self.stats.ok
+        )
+        .unwrap();
+    }
 }
 
 /// This reporter tries to imitate the format used by

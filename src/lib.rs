@@ -172,6 +172,7 @@ pub fn default_main_no_config_override(
         Format::Auto | Format::LibTest => Box::new(report::LibTestReport::new(writer)),
         Format::Json => Box::new(report::JsonReport::new(writer)),
         Format::Tap => Box::new(report::TapReport::new(writer)),
+        Format::Compact => Box::new(report::CompactReport::new(writer)),
     };
     let plan = execution::make_plan(&config, tree);
 
