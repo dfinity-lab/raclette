@@ -127,12 +127,44 @@ pub fn should_panic(
     }
 }
 
+/// The type representing result of completed test run.
+///
+/// Note that this type has an unusual implementation of Drop: if the
+/// test execution failed (at least one task completed with a non-ok
+/// result), dropping this object will terminate current process with
+/// non-zero exit code. This way simply calling `default_main` does
+/// the right thing by default, and still allows you to inspect and
+/// post-process task statuses if you want to.
+///
+/// If you don't want the automatic exit behavior, run
+/// [TestResults::into_completed_tasks] and examine the statuses of
+/// the tasks yourself.
+pub struct TestResults {
+    completed_tasks: Vec<execution::CompletedTask>,
+}
+
+impl TestResults {
+    /// "Disarms" this TaskResult and returns the list of completed tasks
+    /// for examination.
+    pub fn into_completed_tasks(mut self) -> Vec<execution::CompletedTask> {
+        std::mem::take(&mut self.completed_tasks)
+    }
+}
+
+impl Drop for TestResults {
+    fn drop(&mut self) {
+        if self.completed_tasks.iter().any(|t| !t.status.is_ok()) {
+            std::process::exit(1)
+        }
+    }
+}
+
 /// Runs raclette with a default config but reads the command line arguments
 /// and overrides settings from the default config. If this behavior is undesired
 /// refer to [default_main_no_config_override] instead.
 ///
 /// Returns a list of [execution::TaskResult] for each test that was ran.
-pub fn default_main(default_config: Config, tree: TestTree) -> Vec<execution::CompletedTask> {
+pub fn default_main(default_config: Config, tree: TestTree) -> TestResults {
     use config::ConfigParseError as E;
 
     let override_config = Config::from_args().unwrap_or_else(|err| match err {
@@ -161,10 +193,7 @@ pub fn default_main(default_config: Config, tree: TestTree) -> Vec<execution::Co
 }
 
 /// Runs raclette with a fixed configuration. Does not inspect command line options.
-pub fn default_main_no_config_override(
-    config: Config,
-    tree: TestTree,
-) -> Vec<execution::CompletedTask> {
+pub fn default_main_no_config_override(config: Config, tree: TestTree) -> TestResults {
     use config::Format;
 
     let writer = report::ColorWriter::new(config.color);
@@ -175,5 +204,6 @@ pub fn default_main_no_config_override(
     };
     let plan = execution::make_plan(&config, tree);
 
-    execution::execute(&config, plan, &mut *report)
+    let completed_tasks = execution::execute(&config, plan, &mut *report);
+    TestResults { completed_tasks }
 }
