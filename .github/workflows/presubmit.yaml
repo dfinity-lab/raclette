@@ -8,9 +8,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@50fbc622fc4ef5163becd7fab6573eac35f8462e # v1.2.0
 
       - name: Build
-        uses: icepuma/rust-action@1.45.2
+        uses: icepuma/rust-action@08b35c64b63cda67c4ebae4a54af54f8225fa14e # 1.45.2
         with:
           args: cargo fmt -- --check && cargo clippy -- -Dwarnings && cargo build --tests --examples
